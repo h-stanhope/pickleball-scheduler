@@ -4,6 +4,7 @@ import json
 import gspread
 import unicodedata
 import collections
+from datetime import datetime, time, timedelta
 
 st.set_page_config(page_title="Pickleball Generator", page_icon="🏓")
 
@@ -52,9 +53,13 @@ db_names = sorted(list(player_db.keys()))
 normalized_db = {normalize_name(name): name for name in db_names}
 
 # --- UI: Inputs ---
-st.sidebar.header("Settings")
+st.sidebar.header("Session Settings")
 courts_available = st.sidebar.slider("Courts Available", 1, 8, 3) 
-num_rounds = st.sidebar.slider("Number of Rounds to Generate", 1, 10, 6)
+
+# NEW: Dynamic Time Settings
+session_start = st.sidebar.time_input("Session Start Time", value=time(19, 0))
+session_length_hours = st.sidebar.number_input("Length of Session (Hours)", min_value=1.0, max_value=5.0, value=2.0, step=0.5)
+include_warmup = st.sidebar.checkbox("Include 5-min Warmup?", value=True)
 
 st.write("### Attending Players")
 
@@ -108,7 +113,6 @@ else:
         total_f = sum(1 for p in players if p['gender'] == 'F')
         total_m = sum(1 for p in players if p['gender'] == 'M')
         
-        # Quota rules
         req_f_matches = 2 if total_f >= 6 else (1 if total_f >= 4 else 0)
         req_m_matches = 2 if total_m >= 6 else (1 if total_m >= 4 else 0)
 
@@ -116,19 +120,17 @@ else:
         best_score = -float('inf')
         best_sit_outs = None
         
-        # Ensure we only schedule courts we have full players for
         max_playing = min(num_courts * 4, (len(players) // 4) * 4)
 
-        # Generate 1000 schedules and keep the best one
         for _ in range(1000):
             sit_outs = {p['name']: 0 for p in players}
             partner_history = {p['name']: set() for p in players}
             schedule = []
 
             for round_num in range(1, num_rounds + 1):
-                # Shuffle before sorting to randomize who sits out among tied players
                 temp_players = players[:]
                 random.shuffle(temp_players)
+                # BUG FIX APPLIED: reverse=True ensures fair sit-outs
                 temp_players.sort(key=lambda x: sit_outs[x['name']], reverse=True)
                 
                 active_players = temp_players[:max_playing]
@@ -137,7 +139,6 @@ else:
                 for p in sitting_out:
                     sit_outs[p['name']] += 1
                     
-                # Smart Court Chunking
                 m_active = [p for p in active_players if p['gender'] == 'M']
                 f_active = [p for p in active_players if p['gender'] == 'F']
                 random.shuffle(m_active)
@@ -159,7 +160,6 @@ else:
                         elif choice == 'all_f':
                             court = [f_active.pop(), f_active.pop(), f_active.pop(), f_active.pop()]
                     else:
-                        # Fallback for awkward leftovers
                         court = []
                         for _ in range(4):
                             if m_active and f_active:
@@ -170,7 +170,6 @@ else:
                                 court.append(f_active.pop())
                     courts.append(court)
 
-                # Pair within courts
                 round_matches = []
                 for court in courts:
                     p1, p2, p3, p4 = court
@@ -208,7 +207,6 @@ else:
                     'sitting_out': [p['name'] for p in sitting_out]
                 })
 
-            # Grade the schedule
             score = 0
             match_types = {'all_M': 0, 'all_F': 0, 'mixed': 0, 'awkward': 0}
             partner_counts = collections.defaultdict(int)
@@ -230,7 +228,6 @@ else:
             for pair, count in partner_counts.items():
                 if count > 1: score -= (count - 1) * 500
 
-            # Penalties and Rewards
             score -= match_types['awkward'] * 1000
             
             if match_types['all_F'] < req_f_matches:
@@ -251,38 +248,105 @@ else:
 
     # --- UI: Output ---
     if st.button("Generate Matches", type="primary"):
-        if len(final_input_names) < 4:
+        total_players = len(final_input_names)
+        if total_players < 4:
             st.error("You need at least 4 players to generate a match!")
         else:
-            with st.spinner('Running 1000 simulations to find the perfect schedule...'):
-                schedule, final_sit_outs = generate_schedule(final_input_names, courts_available, num_rounds)
+            with st.spinner('Calculating optimal timings & running 1000 simulations...'):
                 
-                st.success("Matches Generated!")
+                # --- TIME & ROUND CALCULATOR ---
+                max_playing_spots = min(courts_available * 4, (total_players // 4) * 4)
+                sitting_out_per_round = total_players - max_playing_spots
                 
-                whatsapp_text = "🏓 *Tonight's Pickleball Schedule* 🏓\n\n"
+                total_time_mins = int(session_length_hours * 60)
+                usable_time = total_time_mins - 2 # Reserve 2 mins for clearup
+                if include_warmup:
+                    usable_time -= 5
                 
-                for r in schedule:
-                    st.write(f"### Round {r['round']}")
-                    whatsapp_text += f"*ROUND {r['round']}*\n"
-                    
-                    if r['sitting_out']:
-                        st.info(f"**Sitting out:** {', '.join(r['sitting_out'])}")
-                        whatsapp_text += f"🛋️ *Sitting out:* {', '.join(r['sitting_out'])}\n"
-                    
-                    for idx, match in enumerate(r['matches']):
-                        t1_p1, t1_p2 = match[0]
-                        t2_p1, t2_p2 = match[1]
+                best_r = 0
+                best_d = 0
+                best_scoring_combo = (-1, -1, -1) # (is_perfect_mod, rounds, duration)
+                
+                # Test all possible round lengths between 12 and 15 mins
+                for d in range(12, 16):
+                    r = (usable_time + 1) // (d + 1) # +1 accounts for the fact there's no changeover after the last round
+                    if r > 0:
+                        total_sitouts = r * sitting_out_per_round
+                        # We want the sitouts to divide perfectly into the total players
+                        is_perfect = 1 if (sitting_out_per_round > 0 and total_sitouts % total_players == 0) else 0
+                        if sitting_out_per_round == 0:
+                            is_perfect = 1 # Always perfect if no one sits out
                         
-                        match_str = f"{t1_p1['name']} & {t1_p2['name']} VS {t2_p1['name']} & {t2_p2['name']}"
-                        st.write(f"**Court {idx + 1}:** {match_str}")
-                        whatsapp_text += f"🏸 Court {idx + 1}: {match_str}\n"
+                        score = (is_perfect, r, d)
+                        if score > best_scoring_combo:
+                            best_scoring_combo = score
+                            best_r = r
+                            best_d = d
+                
+                if best_r == 0:
+                    st.error("The session is too short to fit even a single 12-minute round. Please extend the session length.")
+                else:
+                    # Run the engine with the perfectly calculated rounds
+                    schedule, final_sit_outs = generate_schedule(final_input_names, courts_available, best_r)
+                    
+                    st.success("Matches Generated!")
+                    
+                    # --- SMART OVERVIEW METRICS ---
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("👥 Players", total_players)
+                    col2.metric("🔄 Rounds", best_r)
+                    col3.metric("⏱️ Match Time", f"{best_d} min")
+                    col4.metric("🏸 Courts Used", max_playing_spots // 4)
                     
                     st.divider()
-                    whatsapp_text += "\n"
-                
-                st.write("### WhatsApp Export")
-                st.write("Click the copy button in the top right corner of the box below to paste this into your group chat!")
-                st.code(whatsapp_text, language="markdown")
-                
-                st.write("### Audit: Total Sit-Outs Per Player")
-                st.json(final_sit_outs)
+                    
+                    # --- TIME RENDERING & WHATSAPP GENERATION ---
+                    current_time = datetime.combine(datetime.today(), session_start)
+                    session_end_time = current_time + timedelta(hours=session_length_hours)
+                    
+                    whatsapp_text = f"🏓 *Tonight's Pickleball Schedule* 🏓\n"
+                    whatsapp_text += f"⏱️ *Session:* {current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}\n"
+                    whatsapp_text += f"👥 *Players:* {total_players} | 🏸 *Courts:* {max_playing_spots // 4}\n"
+                    whatsapp_text += f"⏱️ *Match Time:* {best_d} mins\n\n"
+                    
+                    if include_warmup:
+                        warmup_end = current_time + timedelta(minutes=5)
+                        st.info(f"🤸 **{current_time.strftime('%I:%M %p')} - {warmup_end.strftime('%I:%M %p')}**: Warmup")
+                        whatsapp_text += f"🤸 *{current_time.strftime('%I:%M %p')} - {warmup_end.strftime('%I:%M %p')}*: Warmup\n\n"
+                        current_time = warmup_end
+                    
+                    for r in schedule:
+                        round_start = current_time
+                        round_end = current_time + timedelta(minutes=best_d)
+                        
+                        st.write(f"### Round {r['round']} ({round_start.strftime('%I:%M %p')} - {round_end.strftime('%I:%M %p')})")
+                        whatsapp_text += f"🟢 *ROUND {r['round']}* ({round_start.strftime('%I:%M %p')} - {round_end.strftime('%I:%M %p')})\n"
+                        
+                        if r['sitting_out']:
+                            st.info(f"**Sitting out:** {', '.join(r['sitting_out'])}")
+                            whatsapp_text += f"🛋️ *Sitting out:* {', '.join(r['sitting_out'])}\n"
+                        
+                        for idx, match in enumerate(r['matches']):
+                            t1_p1, t1_p2 = match[0]
+                            t2_p1, t2_p2 = match[1]
+                            
+                            match_str = f"{t1_p1['name']} & {t1_p2['name']} VS {t2_p1['name']} & {t2_p2['name']}"
+                            st.write(f"**Court {idx + 1}:** {match_str}")
+                            whatsapp_text += f"🏸 Court {idx + 1}: {match_str}\n"
+                        
+                        st.divider()
+                        whatsapp_text += "\n"
+                        
+                        # Add 1 minute changeover
+                        current_time = round_end + timedelta(minutes=1) 
+                    
+                    # Add Clearup at the end
+                    st.warning(f"🧹 **{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}**: Clear up & Finish")
+                    whatsapp_text += f"🧹 *{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}*: Clear up & Finish\n"
+                    
+                    st.write("### WhatsApp Export")
+                    st.write("Click the copy button in the top right corner of the box below to paste this into your group chat!")
+                    st.code(whatsapp_text, language="markdown")
+                    
+                    st.write("### Audit: Total Sit-Outs Per Player")
+                    st.json(final_sit_outs)
