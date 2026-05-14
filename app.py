@@ -9,7 +9,7 @@ st.title("🏓 Pickleball Match Generator")
 st.write("Generate balanced match schedules directly from your Spond export.")
 
 # --- DATABASE SETUP (GOOGLE SHEETS) ---
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1o_T1bQ4qoyCok2mpFizODxt5llaoStjyGDHu9PMsd_I/edit"
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1OqunrQlJmNGdMjePYtQgK0jVfDZ76bISP8HCu5pepMo/edit"
 
 @st.cache_resource
 def get_gsheet_client():
