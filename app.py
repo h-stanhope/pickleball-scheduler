@@ -61,7 +61,7 @@ session_start = st.sidebar.time_input("Session Start Time", value=time(19, 0))
 session_length_options = []
 for h in range(1, 6):
     for m in [0, 15, 30, 45]:
-        if h == 5 and m > 0: continue # Cap at 5 hours
+        if h == 5 and m > 0: continue 
         parts = []
         if h == 1: parts.append("1 hour")
         elif h > 1: parts.append(f"{h} hours")
@@ -267,47 +267,48 @@ else:
         if total_players < 4:
             st.error("You need at least 4 players to generate a match!")
         else:
-            with st.spinner('Calculating optimal timings & running 1000 simulations...'):
+            with st.spinner('Calculating optimal timings & running simulations...'):
                 
                 max_playing_spots = min(courts_available * 4, (total_players // 4) * 4)
-                sitting_out_per_round = total_players - max_playing_spots
                 
                 best_r = 0
                 best_d = 0
                 best_warmup = 0
                 best_clearup = 0
-                best_score = (-1, -1, -1, -1) 
+                best_score = (-1, -1) # (Total Match Time, -Clearup Time)
 
-                # Time Optimizer Algorithm
+                # --- NEW OPTIMIZER: Maximize playing time ---
                 for d in range(12, 16):
-                    for r in range(1, 20):
-                        time_for_matches = (r * d) + (r - 1) 
+                    # Minimum non-playing time: 7 mins if warmup, 2 mins if no warmup
+                    min_non_playing = 7 if include_warmup else 2
+                    available_for_matches = total_time_mins - min_non_playing
+                    
+                    # Calculate MAX rounds possible for this duration
+                    r = (available_for_matches + 1) // (d + 1)
+                    
+                    if r > 0:
+                        time_for_matches = (r * d) + (r - 1)
                         remaining_time = total_time_mins - time_for_matches
                         
-                        is_valid = False
                         if include_warmup:
-                            if remaining_time >= 7: 
-                                warmup = min(10, remaining_time - 2)
-                                clearup = remaining_time - warmup
-                                is_valid = True
+                            # Warmup flexes between 5 and 10 to eat up spare time, leaving 2+ for clearup
+                            warmup = min(10, remaining_time - 2)
+                            clearup = remaining_time - warmup
                         else:
-                            if remaining_time >= 2:
-                                warmup = 0
-                                clearup = remaining_time
-                                is_valid = True
-                                
-                        if is_valid:
-                            total_sitouts = r * sitting_out_per_round
-                            is_perfect = 1 if (sitting_out_per_round > 0 and total_sitouts % total_players == 0) else 0
-                            if sitting_out_per_round == 0: is_perfect = 1
+                            warmup = 0
+                            clearup = remaining_time
                             
-                            score = (is_perfect, r, -clearup, d)
-                            if score > best_score:
-                                best_score = score
-                                best_r = r
-                                best_d = d
-                                best_warmup = warmup
-                                best_clearup = clearup
+                        total_play_time = r * d
+                        
+                        # Score ranks the absolute most time spent playing first, shortest clearup second
+                        score = (total_play_time, -clearup)
+                        
+                        if score > best_score:
+                            best_score = score
+                            best_r = r
+                            best_d = d
+                            best_warmup = warmup
+                            best_clearup = clearup
                 
                 if best_r == 0:
                     st.error("The session is too short to fit the matches properly. Please extend the session length.")
@@ -327,7 +328,6 @@ else:
                     current_time = datetime.combine(datetime.today(), session_start)
                     session_end_time = current_time + timedelta(minutes=total_time_mins)
                     
-                    # STRICT SINGLE ASTERISKS FOR WHATSAPP
                     whatsapp_text = f"🏓 *Tonight's Pickleball Schedule* 🏓\n"
                     whatsapp_text += f"⏱️ *Session:* {current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}\n"
                     whatsapp_text += f"👥 *Players:* {total_players} | 🏸 *Courts:* {max_playing_spots // 4}\n"
