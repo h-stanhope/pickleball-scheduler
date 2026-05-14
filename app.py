@@ -270,20 +270,19 @@ else:
             with st.spinner('Calculating optimal timings & running simulations...'):
                 
                 max_playing_spots = min(courts_available * 4, (total_players // 4) * 4)
+                sitting_out_per_round = total_players - max_playing_spots
                 
                 best_r = 0
                 best_d = 0
                 best_warmup = 0
                 best_clearup = 0
-                best_score = (-1, -1) # (Total Match Time, -Clearup Time)
+                best_score = (-1, -1, -1, -1) 
 
-                # --- NEW OPTIMIZER: Maximize playing time ---
+                # --- NEW OPTIMIZER: Fairness First, Maximum Rounds Second ---
                 for d in range(12, 16):
-                    # Minimum non-playing time: 7 mins if warmup, 2 mins if no warmup
                     min_non_playing = 7 if include_warmup else 2
                     available_for_matches = total_time_mins - min_non_playing
                     
-                    # Calculate MAX rounds possible for this duration
                     r = (available_for_matches + 1) // (d + 1)
                     
                     if r > 0:
@@ -291,7 +290,6 @@ else:
                         remaining_time = total_time_mins - time_for_matches
                         
                         if include_warmup:
-                            # Warmup flexes between 5 and 10 to eat up spare time, leaving 2+ for clearup
                             warmup = min(10, remaining_time - 2)
                             clearup = remaining_time - warmup
                         else:
@@ -299,9 +297,13 @@ else:
                             clearup = remaining_time
                             
                         total_play_time = r * d
+                        total_sitouts = r * sitting_out_per_round
                         
-                        # Score ranks the absolute most time spent playing first, shortest clearup second
-                        score = (total_play_time, -clearup)
+                        is_perfect = 1 if (sitting_out_per_round > 0 and total_sitouts % total_players == 0) else 0
+                        if sitting_out_per_round == 0: is_perfect = 1
+                        
+                        # Score ranks: Perfect fairness > Most rounds (dilutes sitouts) > Total Play Time > Short clearup
+                        score = (is_perfect, r, total_play_time, -clearup)
                         
                         if score > best_score:
                             best_score = score
