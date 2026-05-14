@@ -129,7 +129,7 @@ else:
                 # Shuffle before sorting to randomize who sits out among tied players
                 temp_players = players[:]
                 random.shuffle(temp_players)
-                temp_players.sort(key=lambda x: sit_outs[x['name']])
+                temp_players.sort(key=lambda x: sit_outs[x['name']], reverse=True)
                 
                 active_players = temp_players[:max_playing]
                 sitting_out = temp_players[max_playing:]
