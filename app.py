@@ -43,7 +43,6 @@ def save_new_players(new_players_dict):
         rows_to_add.append([first_name, last_name, gender])
     sheet.append_rows(rows_to_add)
 
-# --- TEXT NORMALIZER ---
 def normalize_name(name):
     name = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('utf-8')
     return name.strip().lower()
@@ -56,10 +55,28 @@ normalized_db = {normalize_name(name): name for name in db_names}
 st.sidebar.header("Session Settings")
 courts_available = st.sidebar.slider("Courts Available", 1, 8, 3) 
 
-# NEW: Dynamic Time Settings
 session_start = st.sidebar.time_input("Session Start Time", value=time(19, 0))
-session_length_hours = st.sidebar.number_input("Length of Session (Hours)", min_value=1.0, max_value=5.0, value=2.0, step=0.5)
-include_warmup = st.sidebar.checkbox("Include 5-min Warmup?", value=True)
+
+# Custom 15-minute increment dropdown for Session Length
+session_length_options = []
+for h in range(1, 6):
+    for m in [0, 15, 30, 45]:
+        if h == 5 and m > 0: continue # Cap at 5 hours
+        parts = []
+        if h == 1: parts.append("1 hour")
+        elif h > 1: parts.append(f"{h} hours")
+        if m > 0: parts.append(f"{m} mins")
+        session_length_options.append({"label": " ".join(parts), "mins": h * 60 + m})
+
+default_index = next((i for i, item in enumerate(session_length_options) if item["mins"] == 120), 0)
+selected_session = st.sidebar.selectbox(
+    "Length of Session", 
+    options=[opt["label"] for opt in session_length_options],
+    index=default_index
+)
+total_time_mins = next(opt["mins"] for opt in session_length_options if opt["label"] == selected_session)
+
+include_warmup = st.sidebar.checkbox("Include Warmup", value=True)
 
 st.write("### Attending Players")
 
@@ -106,7 +123,6 @@ if unknown_players:
             st.rerun() 
 
 else:
-    # --- CORE ENGINE (Monte Carlo Scoring Algorithm) ---
     def generate_schedule(players_list, num_courts, num_rounds):
         players = [{'name': name, 'gender': player_db[name]} for name in players_list]
         
@@ -130,7 +146,6 @@ else:
             for round_num in range(1, num_rounds + 1):
                 temp_players = players[:]
                 random.shuffle(temp_players)
-                # BUG FIX APPLIED: reverse=True ensures fair sit-outs
                 temp_players.sort(key=lambda x: sit_outs[x['name']], reverse=True)
                 
                 active_players = temp_players[:max_playing]
@@ -254,44 +269,53 @@ else:
         else:
             with st.spinner('Calculating optimal timings & running 1000 simulations...'):
                 
-                # --- TIME & ROUND CALCULATOR ---
                 max_playing_spots = min(courts_available * 4, (total_players // 4) * 4)
                 sitting_out_per_round = total_players - max_playing_spots
                 
-                total_time_mins = int(session_length_hours * 60)
-                usable_time = total_time_mins - 2 # Reserve 2 mins for clearup
-                if include_warmup:
-                    usable_time -= 5
-                
                 best_r = 0
                 best_d = 0
-                best_scoring_combo = (-1, -1, -1) # (is_perfect_mod, rounds, duration)
-                
-                # Test all possible round lengths between 12 and 15 mins
+                best_warmup = 0
+                best_clearup = 0
+                best_score = (-1, -1, -1, -1) 
+
+                # Time Optimizer Algorithm
                 for d in range(12, 16):
-                    r = (usable_time + 1) // (d + 1) # +1 accounts for the fact there's no changeover after the last round
-                    if r > 0:
-                        total_sitouts = r * sitting_out_per_round
-                        # We want the sitouts to divide perfectly into the total players
-                        is_perfect = 1 if (sitting_out_per_round > 0 and total_sitouts % total_players == 0) else 0
-                        if sitting_out_per_round == 0:
-                            is_perfect = 1 # Always perfect if no one sits out
+                    for r in range(1, 20):
+                        time_for_matches = (r * d) + (r - 1) 
+                        remaining_time = total_time_mins - time_for_matches
                         
-                        score = (is_perfect, r, d)
-                        if score > best_scoring_combo:
-                            best_scoring_combo = score
-                            best_r = r
-                            best_d = d
+                        is_valid = False
+                        if include_warmup:
+                            if remaining_time >= 7: 
+                                warmup = min(10, remaining_time - 2)
+                                clearup = remaining_time - warmup
+                                is_valid = True
+                        else:
+                            if remaining_time >= 2:
+                                warmup = 0
+                                clearup = remaining_time
+                                is_valid = True
+                                
+                        if is_valid:
+                            total_sitouts = r * sitting_out_per_round
+                            is_perfect = 1 if (sitting_out_per_round > 0 and total_sitouts % total_players == 0) else 0
+                            if sitting_out_per_round == 0: is_perfect = 1
+                            
+                            score = (is_perfect, r, -clearup, d)
+                            if score > best_score:
+                                best_score = score
+                                best_r = r
+                                best_d = d
+                                best_warmup = warmup
+                                best_clearup = clearup
                 
                 if best_r == 0:
-                    st.error("The session is too short to fit even a single 12-minute round. Please extend the session length.")
+                    st.error("The session is too short to fit the matches properly. Please extend the session length.")
                 else:
-                    # Run the engine with the perfectly calculated rounds
                     schedule, final_sit_outs = generate_schedule(final_input_names, courts_available, best_r)
                     
                     st.success("Matches Generated!")
                     
-                    # --- SMART OVERVIEW METRICS ---
                     col1, col2, col3, col4 = st.columns(4)
                     col1.metric("👥 Players", total_players)
                     col2.metric("🔄 Rounds", best_r)
@@ -300,19 +324,19 @@ else:
                     
                     st.divider()
                     
-                    # --- TIME RENDERING & WHATSAPP GENERATION ---
                     current_time = datetime.combine(datetime.today(), session_start)
-                    session_end_time = current_time + timedelta(hours=session_length_hours)
+                    session_end_time = current_time + timedelta(minutes=total_time_mins)
                     
+                    # STRICT SINGLE ASTERISKS FOR WHATSAPP
                     whatsapp_text = f"🏓 *Tonight's Pickleball Schedule* 🏓\n"
                     whatsapp_text += f"⏱️ *Session:* {current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}\n"
                     whatsapp_text += f"👥 *Players:* {total_players} | 🏸 *Courts:* {max_playing_spots // 4}\n"
                     whatsapp_text += f"⏱️ *Match Time:* {best_d} mins\n\n"
                     
                     if include_warmup:
-                        warmup_end = current_time + timedelta(minutes=5)
-                        st.info(f"🤸 **{current_time.strftime('%I:%M %p')} - {warmup_end.strftime('%I:%M %p')}**: Warmup")
-                        whatsapp_text += f"🤸 *{current_time.strftime('%I:%M %p')} - {warmup_end.strftime('%I:%M %p')}*: Warmup\n\n"
+                        warmup_end = current_time + timedelta(minutes=best_warmup)
+                        st.info(f"🤸 **{current_time.strftime('%I:%M %p')} - {warmup_end.strftime('%I:%M %p')}**: Warmup ({best_warmup} mins)")
+                        whatsapp_text += f"🤸 *{current_time.strftime('%I:%M %p')} - {warmup_end.strftime('%I:%M %p')}*: Warmup ({best_warmup} mins)\n\n"
                         current_time = warmup_end
                     
                     for r in schedule:
@@ -337,12 +361,10 @@ else:
                         st.divider()
                         whatsapp_text += "\n"
                         
-                        # Add 1 minute changeover
                         current_time = round_end + timedelta(minutes=1) 
                     
-                    # Add Clearup at the end
-                    st.warning(f"🧹 **{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}**: Clear up & Finish")
-                    whatsapp_text += f"🧹 *{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}*: Clear up & Finish\n"
+                    st.warning(f"🧹 **{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}**: Clear up & Finish ({best_clearup} mins)")
+                    whatsapp_text += f"🧹 *{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}*: Clear up & Finish ({best_clearup} mins)\n"
                     
                     st.write("### WhatsApp Export")
                     st.write("Click the copy button in the top right corner of the box below to paste this into your group chat!")
