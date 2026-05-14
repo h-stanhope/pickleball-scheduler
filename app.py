@@ -2,14 +2,15 @@ import streamlit as st
 import random
 import json
 import gspread
+import unicodedata
 
 st.set_page_config(page_title="Pickleball Generator", page_icon="🏓")
 
 st.title("🏓 Pickleball Match Generator")
-st.write("Generate balanced match schedules directly from your Spond export.")
+st.write("Generate balanced match schedules directly from your Google Sheets database.")
 
 # --- DATABASE SETUP (GOOGLE SHEETS) ---
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1OqunrQlJmNGdMjePYtQgK0jVfDZ76bISP8HCu5pepMo/edit"
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1o_T1bQ4qoyCok2mpFizODxt5llaoStjyGDHu9PMsd_I/edit"
 
 @st.cache_resource
 def get_gsheet_client():
@@ -20,69 +21,82 @@ gc = get_gsheet_client()
 sheet = gc.open_by_url(SHEET_URL).sheet1
 
 def load_db():
-    # Read the data from Google Sheets expecting 3 columns now
     records = sheet.get_all_records()
     db = {}
     for row in records:
-        # Check that the new column headers exist
         if 'First Name' in row and 'Last Name' in row and 'Gender' in row:
             first = str(row['First Name']).strip()
             last = str(row['Last Name']).strip()
-            
-            # Combine them for matching against the Spond text box
             full_name = f"{first} {last}".strip()
-            
-            if full_name: # Skip empty rows
+            if full_name: 
                 db[full_name] = str(row['Gender']).strip().upper()
     return db
 
 def save_new_players(new_players_dict):
     rows_to_add = []
     for full_name, gender in new_players_dict.items():
-        # Split the full name into First and Last at the first space
         parts = full_name.split(" ", 1)
         first_name = parts[0]
         last_name = parts[1] if len(parts) > 1 else ""
-        
-        # Append as [First Name, Last Name, Gender]
         rows_to_add.append([first_name, last_name, gender])
-        
     sheet.append_rows(rows_to_add)
 
-# Load the player database from Google Sheets
+# --- TEXT NORMALIZER ---
+def normalize_name(name):
+    """Strips accents and converts to lowercase for foolproof matching."""
+    name = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('utf-8')
+    return name.strip().lower()
+
+# Load the player database
 player_db = load_db()
+db_names = sorted(list(player_db.keys()))
+
+# Create a normalized lookup dictionary (e.g. 'sian hosford': 'Siân Hosford')
+normalized_db = {normalize_name(name): name for name in db_names}
 
 # --- UI: Inputs ---
 st.sidebar.header("Settings")
 courts_available = st.sidebar.slider("Courts Available", 1, 8, 3) 
 num_rounds = st.sidebar.slider("Number of Rounds to Generate", 1, 10, 6)
 
-st.write("### Player List")
-st.write("Paste your players below (Just their names, one per line).")
+st.write("### Attending Players")
 
-default_players = """John Smith
-Dave Jones
-Mike Williams
-Tom Brown
-Steve Taylor
-Chris Davies
-Sarah Evans
-Emma Wilson
-Jane Thomas
-Lucy Roberts
-Anna Johnson
-Chloe White"""
+# 1. The Multi-Select Dropdown for existing members
+selected_db_players = st.multiselect(
+    "Select members from your database:", 
+    options=db_names,
+    help="Click and type to quickly search for members."
+)
 
-player_input = st.text_area("Spond Export", default_players, height=200)
+# 2. Text box for brand new players only
+st.write("---")
+new_players_text = st.text_area(
+    "Brand new players? (Not in database)", 
+    placeholder="Type new names here, one per line...", 
+    height=100
+)
 
-# Extract names and clean up whitespace
-input_names = [name.strip() for name in player_input.split('\n') if name.strip()]
+# Combine the inputs securely
+final_input_names = selected_db_players.copy()
+raw_new_names = [name.strip() for name in new_players_text.split('\n') if name.strip()]
+
+unknown_players = []
+
+for raw_name in raw_new_names:
+    norm_name = normalize_name(raw_name)
+    # Check if they typed an existing name with wrong cases/accents
+    if norm_name in normalized_db:
+        correct_db_name = normalized_db[norm_name]
+        if correct_db_name not in final_input_names:
+            final_input_names.append(correct_db_name)
+    else:
+        # It is truly a new player
+        unknown_players.append(raw_name)
+        final_input_names.append(raw_name)
 
 # --- DATABASE CHECK ---
-unknown_players = [name for name in input_names if name not in player_db]
-
 if unknown_players:
-    st.warning(f"⚠️ {len(unknown_players)} new player(s) detected! Please assign their gender below to save them to your Google Sheet.")
+    st.warning(f"⚠️ {len(unknown_players)} new player(s) detected! Please assign their gender below.")
     
     with st.form("new_players_form"):
         new_genders = {}
@@ -99,10 +113,8 @@ else:
     # --- CORE ENGINE ---
     def generate_schedule(players_list, num_courts, num_rounds):
         players = [{'name': name, 'gender': player_db[name]} for name in players_list]
-        
         sit_outs = {p['name']: 0 for p in players}
         partner_history = {p['name']: set() for p in players}
-        
         schedule = []
         max_playing_spots = num_courts * 4
 
@@ -175,11 +187,11 @@ else:
 
     # --- UI: Output ---
     if st.button("Generate Matches", type="primary"):
-        if len(input_names) < 4:
+        if len(final_input_names) < 4:
             st.error("You need at least 4 players to generate a match!")
         else:
             with st.spinner('Calculating best matchups...'):
-                schedule, final_sit_outs = generate_schedule(input_names, courts_available, num_rounds)
+                schedule, final_sit_outs = generate_schedule(final_input_names, courts_available, num_rounds)
                 
                 st.success("Matches Generated!")
                 
