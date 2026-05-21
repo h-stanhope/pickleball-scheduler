@@ -60,7 +60,7 @@ session_start = st.sidebar.time_input("Session Start Time", value=time(19, 0))
 # Custom 15-minute increment dropdown for Session Length
 session_length_options = []
 for h in range(1, 6):
-    for m in [0, 15, 30, 45]:
+    for m in [0, 5, 10, 15, 20, 25, 30,, 35, 40, 45, 50, 55]:
         if h == 5 and m > 0: continue 
         parts = []
         if h == 1: parts.append("1 hour")
