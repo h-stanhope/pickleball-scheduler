@@ -55,17 +55,19 @@ normalized_db = {normalize_name(name): name for name in db_names}
 st.sidebar.header("Session Settings")
 courts_available = st.sidebar.slider("Courts Available", 1, 8, 3) 
 
-session_start = st.sidebar.time_input("Session Start Time", value=time(19, 0))
+session_start = st.sidebar.time_input("Session Start Time", value=time(19, 0), step=timedelta(minutes=5))
 
-# Custom 15-minute increment dropdown for Session Length
+# Custom 5-minute increment dropdown for Session Length
 session_length_options = []
 for h in range(1, 6):
-    for m in [0, 5, 10, 15, 20, 25, 30,, 35, 40, 45, 50, 55]:
+    for m in range(0, 60, 5):  # Generates 0, 5, 10, 15... up to 55
         if h == 5 and m > 0: continue 
+        
         parts = []
         if h == 1: parts.append("1 hour")
         elif h > 1: parts.append(f"{h} hours")
         if m > 0: parts.append(f"{m} mins")
+        
         session_length_options.append({"label": " ".join(parts), "mins": h * 60 + m})
 
 default_index = next((i for i, item in enumerate(session_length_options) if item["mins"] == 120), 0)
