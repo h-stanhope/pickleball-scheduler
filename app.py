@@ -4,7 +4,6 @@ import json
 import gspread
 import unicodedata
 import collections
-import base64
 from datetime import datetime, time, timedelta
 from fpdf import FPDF
 
@@ -274,203 +273,169 @@ else:
 
         return best_schedule, best_sit_outs
 
-    # --- UI: Output ---
+    # Trigger Generation calculation logic step
     if st.button("Generate Matches", type="primary"):
         total_players = len(final_input_names)
         if total_players < 4:
             st.error("You need at least 4 players to generate a match!")
         else:
             with st.spinner('Calculating optimal timings & running simulations...'):
-                
                 max_playing_spots = min(courts_available * 4, (total_players // 4) * 4)
                 sitting_out_per_round = total_players - max_playing_spots
                 
-                best_r = 0
-                best_d = 0
-                best_warmup = 0
-                best_clearup = 0
+                best_r, best_d, best_warmup, best_clearup = 0, 0, 0, 0
                 best_score = (-1, -1, -1, -1) 
 
                 for d in range(12, 16):
                     min_non_playing = 7 if include_warmup else 2
                     available_for_matches = total_time_mins - min_non_playing
-                    
                     r = (available_for_matches + 1) // (d + 1)
                     
                     if r > 0:
                         time_for_matches = (r * d) + (r - 1)
                         remaining_time = total_time_mins - time_for_matches
-                        
-                        if include_warmup:
-                            warmup = min(10, remaining_time - 2)
-                            clearup = remaining_time - warmup
-                        else:
-                            warmup = 0
-                            clearup = remaining_time
+                        warmup = min(10, remaining_time - 2) if include_warmup else 0
+                        clearup = remaining_time - warmup
                             
                         total_play_time = r * d
                         total_sitouts = r * sitting_out_per_round
-                        
                         is_perfect = 1 if (sitting_out_per_round > 0 and total_sitouts % total_players == 0) else 0
                         if sitting_out_per_round == 0: is_perfect = 1
                         
                         score = (is_perfect, r, total_play_time, -clearup)
-                        
                         if score > best_score:
-                            best_score = score
-                            best_r = r
-                            best_d = d
-                            best_warmup = warmup
-                            best_clearup = clearup
+                            best_score, best_r, best_d, best_warmup, best_clearup = score, r, d, warmup, clearup
                 
                 if best_r == 0:
-                    st.error("The session is too short to fit the matches properly. Please extend the session length.")
+                    st.error("The session is too short to fit the matches properly.")
                 else:
                     schedule, final_sit_outs = generate_schedule(final_input_names, courts_available, best_r)
                     
-                    st.success("Matches Generated!")
+                    # --- CACHE DATA INTO SESSION STATE TO STOP REFRESH BUG ---
+                    st.session_state["pickleball_results"] = {
+                        "schedule": schedule,
+                        "final_sit_outs": final_sit_outs,
+                        "total_players": total_players,
+                        "best_r": best_r,
+                        "best_d": best_d,
+                        "best_warmup": best_warmup,
+                        "best_clearup": best_clearup,
+                        "max_playing_spots": max_playing_spots
+                    }
+
+    # --- RENDER BLOCK (RUNS FREELY AND PULLS FROM CACHED STATE) ---
+    if "pickleball_results" in st.session_state:
+        res = st.session_state["pickleball_results"]
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("👥 Players", res["total_players"])
+        col2.metric("🔄 Rounds", res["best_r"])
+        col3.metric("⏱️ Match Time", f"{res['best_d']} min")
+        col4.metric("🏓 Courts Used", res["max_playing_spots"] // 4)
+        st.divider()
+        
+        start_time_calculated = datetime.combine(datetime.today(), session_start)
+        session_end_time = start_time_calculated + timedelta(minutes=total_time_mins)
+        current_time = start_time_calculated
+        num_emojis = {1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣", 7: "7️⃣", 8: "8️⃣"}
+        
+        # Build PDF structure canvas safely
+        pdf = FPDF(orientation="landscape", unit="mm", format="A4")
+        pdf.set_margin(12)
+        pdf.set_auto_page_break(auto=(res["best_r"] > 8), margin=15)
+        pdf.add_page()
+        
+        pdf.set_font("Helvetica", "B", 16)
+        pdf.cell(0, 8, "Tonight's Pickleball Schedule", ln=True, align="C")
+        pdf.set_font("Helvetica", "", 10)
+        
+        meta_text = f"Session: {start_time_calculated.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}  |  Players: {res['total_players']}  |  Courts: {res['max_playing_spots'] // 4}  |  Match Length: {res['best_d']} mins"
+        if include_warmup:
+            warmup_end = start_time_calculated + timedelta(minutes=res["best_warmup"])
+            meta_text += f"  |  Warmup: {start_time_calculated.strftime('%I:%M %p')}-{warmup_end.strftime('%I:%M %p')}"
+        pdf.cell(0, 6, meta_text, ln=True, align="C")
+        pdf.ln(4)
+        
+        table_headers = ["Round / Time"]
+        for c_idx in range(res["max_playing_spots"] // 4):
+            table_headers.append(f"Court {c_idx + 1}")
+        table_headers.append("Sitting Out")
+        
+        table_data = []
+        whatsapp_text = f"🏓 *Tonight's Pickleball Schedule* 🏓\n"
+        whatsapp_text += f"⏱️ *Session:* {current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}\n"
+        whatsapp_text += f"👥 *Players:* {res['total_players']} | 🏓 *Courts:* {res['max_playing_spots'] // 4}\n"
+        whatsapp_text += f"⏱️ *Match Time:* {res['best_d']} mins\n\n"
+        
+        if include_warmup:
+            warmup_end = current_time + timedelta(minutes=res["best_warmup"])
+            st.info(f"🤸 **{current_time.strftime('%I:%M %p')} - {warmup_end.strftime('%I:%M %p')}**: Warmup ({res['best_warmup']} mins)")
+            whatsapp_text += f"🤸 *{current_time.strftime('%I:%M %p')} - {warmup_end.strftime('%I:%M %p')}*: Warmup ({res['best_warmup']} mins)\n\n"
+            current_time = warmup_end
+        
+        for r in res["schedule"]:
+            round_start = current_time
+            round_end = current_time + timedelta(minutes=res["best_d"])
+            
+            st.write(f"### Round {r['round']} ({round_start.strftime('%I:%M %p')} - {round_end.strftime('%I:%M %p')})")
+            whatsapp_text += f"🟢 *ROUND {r['round']}* ({round_start.strftime('%I:%M %p')} - {round_end.strftime('%I:%M %p')})\n"
+            row_cells = [f"Round {r['round']}\n{round_start.strftime('%I:%M %p')}-{round_end.strftime('%I:%M %p')}"]
+            
+            if r['sitting_out']:
+                st.info(f"**Sitting out:** {', '.join(r['sitting_out'])}")
+                whatsapp_text += f"🛋️ *Sitting out:* {', '.join(r['sitting_out'])}\n"
+            
+            for idx, match in enumerate(r['matches']):
+                t1_p1, t1_p2 = match[0]
+                t2_p1, t2_p2 = match[1]
+                c_num = idx + 1
+                emoji_num = num_emojis.get(c_num, f"{c_num}")
+                
+                match_str = f"{t1_p1['name']} & {t1_p2['name']} VS {t2_p1['name']} & {t2_p2['name']}"
+                st.write(f"**Court {emoji_num}:** {match_str}")
+                whatsapp_text += f"{emoji_num} Court {c_num}: {match_str}\n"
+                
+                row_cells.append(f"{t1_p1['name']} & {t1_p2['name']}\n    vs\n{t2_p1['name']} & {t2_p2['name']}")
+                
+            row_cells.append(", ".join(r['sitting_out']) if r['sitting_out'] else "None")
+            table_data.append(row_cells)
+            st.divider()
+            whatsapp_text += "\n"
+            current_time = round_end + timedelta(minutes=1)
+        
+        st.warning(f"🧹 **{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}**: Clear up & Finish ({res['best_clearup']} mins)")
+        whatsapp_text += f"🧹 *{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}*: Clear up & Finish ({res['best_clearup']} mins)\n"
+        
+        f_size = 7.5 if res["best_r"] == 8 else 8.5
+        pdf.set_font("Helvetica", "B", 10)
+        with pdf.table(text_align="CENTER", col_widths=(14, 25, 25, 25, 20) if (res["max_playing_spots"] // 4) == 3 else None) as table:
+            header_row = table.row()
+            for h in table_headers:
+                header_row.cell(h)
+            
+            pdf.set_font("Helvetica", "", f_size)
+            for row_data in table_data:
+                body_row = table.row()
+                for cell_text in row_data:
+                    body_row.cell(cell_text)
                     
-                    col1, col2, col3, col4 = st.columns(4)
-                    col1.metric("👥 Players", total_players)
-                    col2.metric("🔄 Rounds", best_r)
-                    col3.metric("⏱️ Match Time", f"{best_d} min")
-                    col4.metric("🏓 Courts Used", max_playing_spots // 4)
-                    
-                    st.divider()
-                    
-                    start_time_calculated = datetime.combine(datetime.today(), session_start)
-                    session_end_time = start_time_calculated + timedelta(minutes=total_time_mins)
-                    current_time = start_time_calculated
-                    
-                    num_emojis = {1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣", 7: "7️⃣", 8: "8️⃣"}
-                    
-                    # --- NATIVE TABLE PDF GENERATOR (A4 Landscape) ---
-                    pdf = FPDF(orientation="landscape", unit="mm", format="A4")
-                    pdf.set_margin(12)
-                    
-                    # Layout safety protection logic
-                    if best_r <= 8:
-                        pdf.set_auto_page_break(auto=False)
-                    else:
-                        pdf.set_auto_page_break(auto=True, margin=15)
-                        
-                    pdf.add_page()
-                    
-                    pdf.set_font("Helvetica", "B", 16)
-                    pdf.cell(0, 8, "Tonight's Pickleball Schedule", ln=True, align="C")
-                    pdf.set_font("Helvetica", "", 10)
-                    
-                    meta_text = f"Session: {start_time_calculated.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}  |  Players: {total_players}  |  Courts: {max_playing_spots // 4}  |  Match Length: {best_d} mins"
-                    if include_warmup:
-                        warmup_end = start_time_calculated + timedelta(minutes=best_warmup)
-                        meta_text += f"  |  Warmup: {start_time_calculated.strftime('%I:%M %p')}-{warmup_end.strftime('%I:%M %p')}"
-                    pdf.cell(0, 6, meta_text, ln=True, align="C")
-                    pdf.ln(4)
-                    
-                    table_headers = ["Round / Time"]
-                    for c_idx in range(max_playing_spots // 4):
-                        table_headers.append(f"Court {c_idx + 1}")
-                    table_headers.append("Sitting Out")
-                    
-                    table_data = []
-                    
-                    whatsapp_text = f"🏓 *Tonight's Pickleball Schedule* 🏓\n"
-                    whatsapp_text += f"⏱️ *Session:* {current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}\n"
-                    whatsapp_text += f"👥 *Players:* {total_players} | 🏓 *Courts:* {max_playing_spots // 4}\n"
-                    whatsapp_text += f"⏱️ *Match Time:* {best_d} mins\n\n"
-                    
-                    if include_warmup:
-                        warmup_end = current_time + timedelta(minutes=best_warmup)
-                        st.info(f"🤸 **{current_time.strftime('%I:%M %p')} - {warmup_end.strftime('%I:%M %p')}**: Warmup ({best_warmup} mins)")
-                        whatsapp_text += f"🤸 *{current_time.strftime('%I:%M %p')} - {warmup_end.strftime('%I:%M %p')}*: Warmup ({best_warmup} mins)\n\n"
-                        current_time = warmup_end
-                    
-                    for r in schedule:
-                        round_start = current_time
-                        round_end = current_time + timedelta(minutes=best_d)
-                        
-                        st.write(f"### Round {r['round']} ({round_start.strftime('%I:%M %p')} - {round_end.strftime('%I:%M %p')})")
-                        whatsapp_text += f"🟢 *ROUND {r['round']}* ({round_start.strftime('%I:%M %p')} - {round_end.strftime('%I:%M %p')})\n"
-                        
-                        row_cells = [f"Round {r['round']}\n{round_start.strftime('%I:%M %p')}-{round_end.strftime('%I:%M %p')}"]
-                        
-                        if r['sitting_out']:
-                            st.info(f"**Sitting out:** {', '.join(r['sitting_out'])}")
-                            whatsapp_text += f"🛋️ *Sitting out:* {', '.join(r['sitting_out'])}\n"
-                        
-                        for idx, match in enumerate(r['matches']):
-                            t1_p1, t1_p2 = match[0]
-                            t2_p1, t2_p2 = match[1]
-                            
-                            c_num = idx + 1
-                            emoji_num = num_emojis.get(c_num, f"{c_num}")
-                            
-                            match_str = f"{t1_p1['name']} & {t1_p2['name']} VS {t2_p1['name']} & {t2_p2['name']}"
-                            st.write(f"**Court {emoji_num}:** {match_str}")
-                            whatsapp_text += f"{emoji_num} Court {c_num}: {match_str}\n"
-                            
-                            row_cells.append(f"{t1_p1['name']} & {t1_p2['name']}\n    vs\n{t2_p1['name']} & {t2_p2['name']}")
-                            
-                        row_cells.append(", ".join(r['sitting_out']) if r['sitting_out'] else "None")
-                        table_data.append(row_cells)
-                        
-                        st.divider()
-                        whatsapp_text += "\n"
-                        current_time = round_end + timedelta(minutes=1) 
-                    
-                    st.warning(f"🧹 **{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}**: Clear up & Finish ({best_clearup} mins)")
-                    whatsapp_text += f"🧹 *{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}*: Clear up & Finish ({best_clearup} mins)\n"
-                    
-                    f_size = 7.5 if best_r == 8 else 8.5
-                    
-                    pdf.set_font("Helvetica", "B", 10)
-                    with pdf.table(text_align="CENTER", col_widths=(14, 25, 25, 25, 20) if (max_playing_spots // 4) == 3 else None) as table:
-                        header_row = table.row()
-                        for h in table_headers:
-                            header_row.cell(h)
-                        
-                        pdf.set_font("Helvetica", "", f_size)
-                        for row_data in table_data:
-                            body_row = table.row()
-                            for cell_text in row_data:
-                                body_row.cell(cell_text)
-                                
-                    pdf.ln(3)
-                    pdf.set_font("Helvetica", "I", 9)
-                    pdf.cell(0, 5, f"Clear up & Finish: {current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')} ({best_clearup} mins)", ln=True, align="C")
-                    
-                    st.write("### WhatsApp Export")
-                    st.write("Click the copy button in the top right corner of the box below to paste this into your group chat!")
-                    st.code(whatsapp_text, language="markdown")
-                    
-                    # --- NEW HYPERLINK SOLUTION (NO PAGE RERUN) ---
-                    st.write("### Print Version")
-                    st.write("Open the clean single-page matrix layout in a secure browser tab to print or save natively.")
-                    pdf_bytes = pdf.output()
-                    
-                    # Compile raw bytes into a safe binary inline blob link
-                    base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
-                    blob_url = f"data:application/pdf;base64,{base64_pdf}"
-                    
-                    # Style the HTML anchor link exactly like Streamlit's native buttons
-                    button_html = f'''
-                    <a href="{blob_url}" target="_blank" style="
-                        text-decoration: none;
-                        color: white;
-                        background-color: #FF4B4B;
-                        padding: 10px 20px;
-                        border-radius: 8px;
-                        font-weight: 500;
-                        display: inline-block;
-                        text-align: center;
-                        border: none;
-                        transition: background-color 0.3s ease;
-                    " onmouseover="this.style.backgroundColor='#E03E3E'" onmouseout="this.style.backgroundColor='#FF4B4B'">
-                        🖨️ Open PDF in New Tab
-                    </a>
-                    '''
-                    st.markdown(button_html, unsafe_allow_html=True)
-                    st.write("")
-                    
-                    st.write("### Audit: Total Sit-Outs Per Player")
-                    st.json(final_sit_outs)
+        pdf.ln(3)
+        pdf.set_font("Helvetica", "I", 9)
+        pdf.cell(0, 5, f"Clear up & Finish: {current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')} ({res['best_clearup']} mins)", ln=True, align="C")
+        
+        st.write("### WhatsApp Export")
+        st.code(whatsapp_text, language="markdown")
+        
+        # --- SAFE NATIVE DOWNLOAD BUTTON BLOCK ---
+        st.write("### Print Version")
+        st.write("Click below to download the clean single-page layout document.")
+        pdf_bytes = pdf.output()
+        st.download_button(
+            label="📥 Download Printable PDF",
+            data=bytes(pdf_bytes),
+            file_name=f"pickleball_schedule_{datetime.today().strftime('%Y-%m-%d')}.pdf",
+            mime="application/pdf"
+        )
+        
+        st.write("### Audit: Total Sit-Outs Per Player")
+        st.json(res["final_sit_outs"])
