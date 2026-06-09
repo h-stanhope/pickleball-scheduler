@@ -273,7 +273,7 @@ else:
 
         return best_schedule, best_sit_outs
 
-# --- UI: Output ---
+    # --- UI: Output ---
     if st.button("Generate Matches", type="primary"):
         total_players = len(final_input_names)
         if total_players < 4:
@@ -343,20 +343,30 @@ else:
                     
                     num_emojis = {1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣", 7: "7️⃣", 8: "8️⃣"}
                     
-                    # --- TWO-COLUMN PDF INITIALIZATION ---
-                    pdf = FPDF()
-                    pdf.set_margin(10)
+                    # --- NATIVE TABLE PDF GENERATOR (STRICTLY 1 PAGE) ---
+                    pdf = FPDF(orientation="landscape", unit="mm", format="A4")  # Landscape fits courts beautifully side-by-side
+                    pdf.set_margin(12)
                     pdf.add_page()
                     
-                    # Header block
-                    pdf.set_font("Helvetica", "B", 15)
-                    pdf.cell(0, 7, "Tonight's Pickleball Schedule", ln=True, align="C")
-                    pdf.set_font("Helvetica", "", 9)
-                    pdf.cell(0, 5, f"Session: {start_time_calculated.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}  |  Players: {total_players}  |  Courts: {max_playing_spots // 4}  |  Match Length: {best_d} mins", ln=True, align="C")
+                    pdf.set_font("Helvetica", "B", 16)
+                    pdf.cell(0, 8, "Tonight's Pickleball Schedule", ln=True, align="C")
+                    pdf.set_font("Helvetica", "", 10)
+                    
+                    meta_text = f"Session: {start_time_calculated.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}  |  Players: {total_players}  |  Courts: {max_playing_spots // 4}  |  Match Length: {best_d} mins"
+                    if include_warmup:
+                        warmup_end = start_time_calculated + timedelta(minutes=best_warmup)
+                        meta_text += f"  |  Warmup: {start_time_calculated.strftime('%I:%M %p')}-{warmup_end.strftime('%I:%M %p')}"
+                    pdf.cell(0, 6, meta_text, ln=True, align="C")
                     pdf.ln(4)
                     
-                    # Store current vertical position right under the header
-                    top_y = pdf.get_y()
+                    # Prepare table header dynamic configuration
+                    table_headers = ["Round / Time"]
+                    for c_idx in range(max_playing_spots // 4):
+                        table_headers.append(f"Court {c_idx + 1}")
+                    table_headers.append("Sitting Out")
+                    
+                    # Construct rows natively
+                    table_data = []
                     
                     whatsapp_text = f"🏓 *Tonight's Pickleball Schedule* 🏓\n"
                     whatsapp_text += f"⏱️ *Session:* {current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}\n"
@@ -368,11 +378,7 @@ else:
                         st.info(f"🤸 **{current_time.strftime('%I:%M %p')} - {warmup_end.strftime('%I:%M %p')}**: Warmup ({best_warmup} mins)")
                         whatsapp_text += f"🤸 *{current_time.strftime('%I:%M %p')} - {warmup_end.strftime('%I:%M %p')}*: Warmup ({best_warmup} mins)\n\n"
                         current_time = warmup_end
-
-                    # Midpoint splitter logic for the columns
-                    mid_point = (best_r // 2) + (1 if best_r % 2 != 0 else 0)
                     
-                    # Global text rendering step loop
                     for r in schedule:
                         round_start = current_time
                         round_end = current_time + timedelta(minutes=best_d)
@@ -380,38 +386,12 @@ else:
                         st.write(f"### Round {r['round']} ({round_start.strftime('%I:%M %p')} - {round_end.strftime('%I:%M %p')})")
                         whatsapp_text += f"🟢 *ROUND {r['round']}* ({round_start.strftime('%I:%M %p')} - {round_end.strftime('%I:%M %p')})\n"
                         
-                        # --- PDF COLUMN ROUTING ENGINE ---
-                        if r['round'] <= mid_point:
-                            # Column 1 Left Side Boundaries
-                            pdf.set_xy(10, pdf.get_y() if r['round'] > 1 else top_y)
-                            width_alloc = 92
-                        else:
-                            # Column 2 Right Side Boundaries
-                            if r['round'] == mid_point + 1:
-                                pdf.set_xy(108, top_y) # Reset height index for column 2 top track
-                                # Add the Warmup text nicely to the top of Column 2 if it exists
-                                if include_warmup:
-                                    w_start = start_time_calculated.strftime('%I:%M %p')
-                                    w_end = warmup_end.strftime('%I:%M %p')
-                                    pdf.set_font("Helvetica", "I", 8.5)
-                                    pdf.cell(92, 4, f"{w_start} - {w_end}: Warmup ({best_warmup} mins)", ln=True)
-                                    pdf.set_xy(108, pdf.get_y() + 1.5)
-                            else:
-                                pdf.set_xy(108, pdf.get_y())
-                            width_alloc = 92
-                        
-                        # Write Round Title Block to PDF
-                        pdf.set_font("Helvetica", "B", 10)
-                        pdf.cell(width_alloc, 5, f"ROUND {r['round']} ({round_start.strftime('%I:%M %p')} - {round_end.strftime('%I:%M %p')})", ln=True)
+                        row_cells = [f"Round {r['round']}\n{round_start.strftime('%I:%M %p')}-{round_end.strftime('%I:%M %p')}"]
                         
                         if r['sitting_out']:
                             st.info(f"**Sitting out:** {', '.join(r['sitting_out'])}")
                             whatsapp_text += f"🛋️ *Sitting out:* {', '.join(r['sitting_out'])}\n"
-                            
-                            pdf.set_font("Helvetica", "I", 8.5)
-                            pdf.cell(width_alloc, 4, f"  Sit out: {', '.join(r['sitting_out'])}", ln=True)
                         
-                        pdf.set_font("Helvetica", "", 9.5)
                         for idx, match in enumerate(r['matches']):
                             t1_p1, t1_p2 = match[0]
                             t2_p1, t2_p2 = match[1]
@@ -423,21 +403,37 @@ else:
                             st.write(f"**Court {emoji_num}:** {match_str}")
                             whatsapp_text += f"{emoji_num} Court {c_num}: {match_str}\n"
                             
-                            pdf.cell(width_alloc, 4.5, f"  C{c_num}: {match_str}", ln=True)
+                            # Standard clean format for the print cell
+                            row_cells.append(f"{t1_p1['name']} & {t1_p2['name']}\n    vs\n{t2_p1['name']} & {t2_p2['name']}")
+                            
+                        row_cells.append(", ".join(r['sitting_out']) if r['sitting_out'] else "None")
+                        table_data.append(row_cells)
                         
                         st.divider()
                         whatsapp_text += "\n"
-                        pdf.ln(3.5) # Clean segment pad
-                        
                         current_time = round_end + timedelta(minutes=1) 
                     
                     st.warning(f"🧹 **{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}**: Clear up & Finish ({best_clearup} mins)")
                     whatsapp_text += f"🧹 *{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}*: Clear up & Finish ({best_clearup} mins)\n"
                     
-                    # Place Clear-Up block nicely at the very bottom of Column 2
-                    pdf.set_xy(108, pdf.get_y())
-                    pdf.set_font("Helvetica", "I", 8.5)
-                    pdf.cell(92, 4, f"{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}: Clear up & Finish ({best_clearup} mins)", ln=True)
+                    # Draw structured table on the PDF canvas safely
+                    pdf.set_font("Helvetica", "B", 10)
+                    with pdf.table(text_align="CENTER", col_widths=(14, 25, 25, 25, 20) if (max_playing_spots // 4) == 3 else None) as table:
+                        # Print Header Row
+                        header_row = table.row()
+                        for h in table_headers:
+                            header_row.cell(h)
+                        
+                        # Print Body Rows
+                        pdf.set_font("Helvetica", "", 8.5)
+                        for row_data in table_data:
+                            body_row = table.row()
+                            for cell_text in row_data:
+                                body_row.cell(cell_text)
+                                
+                    pdf.ln(3)
+                    pdf.set_font("Helvetica", "I", 9)
+                    pdf.cell(0, 5, f"Clear up & Finish: {current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')} ({best_clearup} mins)", ln=True, align="C")
                     
                     st.write("### WhatsApp Export")
                     st.write("Click the copy button in the top right corner of the box below to paste this into your group chat!")
@@ -445,12 +441,12 @@ else:
                     
                     # --- PRINT GRID BLOCK ---
                     st.write("### Print Version")
-                    st.write("Download a clean single-page grid layout optimized perfectly for clipboards.")
+                    st.write("Download a beautiful landscape grid layout guaranteed to fit completely on one printable sheet.")
                     pdf_bytes = pdf.output()
                     st.download_button(
                         label="📥 Download Printable PDF (Strictly 1 Page)",
                         data=bytes(pdf_bytes),
-                        file_name=f"pickleball_grid_schedule_{datetime.today().strftime('%Y-%m-%d')}.pdf",
+                        file_name=f"pickleball_matrix_schedule_{datetime.today().strftime('%Y-%m-%d')}.pdf",
                         mime="application/pdf"
                     )
                     
