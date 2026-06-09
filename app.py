@@ -4,6 +4,7 @@ import json
 import gspread
 import unicodedata
 import collections
+import base64
 from datetime import datetime, time, timedelta
 from fpdf import FPDF
 
@@ -126,6 +127,7 @@ if unknown_players:
             st.rerun() 
 
 else:
+    # --- UPDATED GENERATOR ENGINE ---
     def generate_schedule(players_list, num_courts, num_rounds):
         players = [{'name': name, 'gender': player_db[name]} for name in players_list]
         
@@ -141,9 +143,11 @@ else:
         
         max_playing = min(num_courts * 4, (len(players) // 4) * 4)
 
-        for _ in range(1000):
+        # Increased to 3,000 iterations to allow the stricter matrix tracking room to succeed
+        for _ in range(3000):
             sit_outs = {p['name']: 0 for p in players}
             partner_history = {p['name']: set() for p in players}
+            court_sharing_history = collections.defaultdict(int)
             schedule = []
 
             for round_num in range(1, num_rounds + 1):
@@ -193,13 +197,26 @@ else:
                     p1, p2, p3, p4 = court
                     ways = [((p1, p2), (p3, p4)), ((p1, p3), (p2, p4)), ((p1, p4), (p2, p3))]
                     best_way = ways[0]
-                    best_w_score = -999
+                    best_w_score = -9999
 
                     for way in ways:
                         t1, t2 = way
                         w_score = 0
-                        if t1[1]['name'] in partner_history[t1[0]['name']]: w_score -= 100
-                        if t2[1]['name'] in partner_history[t2[0]['name']]: w_score -= 100
+                        
+                        # Partner Restriction Check
+                        if t1[1]['name'] in partner_history[t1[0]['name']]: w_score -= 500
+                        if t2[1]['name'] in partner_history[t2[0]['name']]: w_score -= 500
+
+                        # Court-Sharing Protection: Intercept loops before they lock onto a court
+                        pairs = [
+                            (t1[0]['name'], t1[1]['name']), (t2[0]['name'], t2[1]['name']),
+                            (t1[0]['name'], t2[0]['name']), (t1[0]['name'], t2[1]['name']),
+                            (t1[1]['name'], t2[0]['name']), (t1[1]['name'], t2[1]['name'])
+                        ]
+                        for pa, pb in pairs:
+                            seen_count = court_sharing_history[frozenset([pa, pb])]
+                            if seen_count >= 1:
+                                w_score -= seen_count * 150 # Escalates penalty for court-rematches
 
                         g1 = sorted([t1[0]['gender'], t1[1]['gender']])
                         g2 = sorted([t2[0]['gender'], t2[1]['gender']])
@@ -217,6 +234,13 @@ else:
                     partner_history[t1[1]['name']].add(t1[0]['name'])
                     partner_history[t2[0]['name']].add(t2[1]['name'])
                     partner_history[t2[1]['name']].add(t2[0]['name'])
+                    
+                    # Lock interaction pairs into local history state
+                    all_players_on_court = [t1[0]['name'], t1[1]['name'], t2[0]['name'], t2[1]['name']]
+                    for i in range(4):
+                        for j in range(i + 1, 4):
+                            court_sharing_history[frozenset([all_players_on_court[i], all_players_on_court[j]])] += 1
+                    
                     round_matches.append(best_way)
 
                 schedule.append({
@@ -228,7 +252,7 @@ else:
             score = 0
             match_types = {'all_M': 0, 'all_F': 0, 'mixed': 0, 'awkward': 0}
             partner_counts = collections.defaultdict(int)
-            opponent_counts = collections.defaultdict(int)
+            global_sharing_counts = collections.defaultdict(int)
 
             for r in schedule:
                 for match in r['matches']:
@@ -238,10 +262,11 @@ else:
                     partner_counts[frozenset([t1_p1['name'], t1_p2['name']])] += 1
                     partner_counts[frozenset([t2_p1['name'], t2_p2['name']])] += 1
 
-                    opponent_counts[frozenset([t1_p1['name'], t2_p1['name']])] += 1
-                    opponent_counts[frozenset([t1_p1['name'], t2_p2['name']])] += 1
-                    opponent_counts[frozenset([t1_p2['name'], t2_p1['name']])] += 1
-                    opponent_counts[frozenset([t1_p2['name'], t2_p2['name']])] += 1
+                    # Log every court match configuration connection globally
+                    all_p = [t1_p1['name'], t1_p2['name'], t2_p1['name'], t2_p2['name']]
+                    for i in range(4):
+                        for j in range(i + 1, 4):
+                            global_sharing_counts[frozenset([all_p[i], all_p[j]])] += 1
 
                     m_count = sum(1 for p in [t1_p1, t1_p2, t2_p1, t2_p2] if p['gender'] == 'M')
                     if m_count == 4: match_types['all_M'] += 1
@@ -250,19 +275,23 @@ else:
                     else: match_types['awkward'] += 1
 
             for pair, count in partner_counts.items():
-                if count > 1: score -= (count - 1) * 500
+                if count > 1: score -= (count - 1) * 1000
 
-            for pair, count in opponent_counts.items():
-                if count > 1: score -= (count - 1) * 300
+            # CRITICAL LOOP PENALTY: Heavily flags schedules containing 3x or 4x court duplicates
+            for pair, count in global_sharing_counts.items():
+                if count > 2: 
+                    score -= (count - 2) * 800  
+                elif count == 2:
+                    score -= 100 
 
-            score -= match_types['awkward'] * 1000
+            score -= match_types['awkward'] * 2000
             
             if match_types['all_F'] < req_f_matches:
-                score -= (req_f_matches - match_types['all_F']) * 800
+                score -= (req_f_matches - match_types['all_F']) * 1500
             if match_types['all_M'] < req_m_matches:
-                score -= (req_m_matches - match_types['all_M']) * 800
+                score -= (req_m_matches - match_types['all_M']) * 1500
 
-            score += match_types['mixed'] * 10
+            score += match_types['mixed'] * 20
             score += match_types['all_F'] * 10
             score += match_types['all_M'] * 10
 
@@ -273,45 +302,61 @@ else:
 
         return best_schedule, best_sit_outs
 
-    # Trigger Generation calculation logic step
+    # --- UI TRIGGER BLOCK ---
     if st.button("Generate Matches", type="primary"):
         total_players = len(final_input_names)
         if total_players < 4:
             st.error("You need at least 4 players to generate a match!")
         else:
             with st.spinner('Calculating optimal timings & running simulations...'):
+                
                 max_playing_spots = min(courts_available * 4, (total_players // 4) * 4)
                 sitting_out_per_round = total_players - max_playing_spots
                 
-                best_r, best_d, best_warmup, best_clearup = 0, 0, 0, 0
+                best_r = 0
+                best_d = 0
+                best_warmup = 0
+                best_clearup = 0
                 best_score = (-1, -1, -1, -1) 
 
                 for d in range(12, 16):
                     min_non_playing = 7 if include_warmup else 2
                     available_for_matches = total_time_mins - min_non_playing
+                    
                     r = (available_for_matches + 1) // (d + 1)
                     
                     if r > 0:
                         time_for_matches = (r * d) + (r - 1)
                         remaining_time = total_time_mins - time_for_matches
-                        warmup = min(10, remaining_time - 2) if include_warmup else 0
-                        clearup = remaining_time - warmup
+                        
+                        if include_warmup:
+                            warmup = min(10, remaining_time - 2)
+                            clearup = remaining_time - warmup
+                        else:
+                            warmup = 0
+                            clearup = remaining_time
                             
                         total_play_time = r * d
                         total_sitouts = r * sitting_out_per_round
+                        
                         is_perfect = 1 if (sitting_out_per_round > 0 and total_sitouts % total_players == 0) else 0
                         if sitting_out_per_round == 0: is_perfect = 1
                         
                         score = (is_perfect, r, total_play_time, -clearup)
+                        
                         if score > best_score:
-                            best_score, best_r, best_d, best_warmup, best_clearup = score, r, d, warmup, clearup
+                            best_score = score
+                            best_r = r
+                            best_d = d
+                            best_warmup = warmup
+                            best_clearup = clearup
                 
                 if best_r == 0:
                     st.error("The session is too short to fit the matches properly.")
                 else:
                     schedule, final_sit_outs = generate_schedule(final_input_names, courts_available, best_r)
                     
-                    # --- CACHE DATA INTO SESSION STATE TO STOP REFRESH BUG ---
+                    # Cache layout to state engine to eliminate the refresh bug
                     st.session_state["pickleball_results"] = {
                         "schedule": schedule,
                         "final_sit_outs": final_sit_outs,
@@ -323,7 +368,7 @@ else:
                         "max_playing_spots": max_playing_spots
                     }
 
-    # --- RENDER BLOCK (RUNS FREELY AND PULLS FROM CACHED STATE) ---
+    # --- UI RENDERING (SAVES STATE STABILITY) ---
     if "pickleball_results" in st.session_state:
         res = st.session_state["pickleball_results"]
         
@@ -332,14 +377,16 @@ else:
         col2.metric("🔄 Rounds", res["best_r"])
         col3.metric("⏱️ Match Time", f"{res['best_d']} min")
         col4.metric("🏓 Courts Used", res["max_playing_spots"] // 4)
+        
         st.divider()
         
         start_time_calculated = datetime.combine(datetime.today(), session_start)
         session_end_time = start_time_calculated + timedelta(minutes=total_time_mins)
         current_time = start_time_calculated
+        
         num_emojis = {1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣", 7: "7️⃣", 8: "8️⃣"}
         
-        # Build PDF structure canvas safely
+        # Build A4 PDF Canvas
         pdf = FPDF(orientation="landscape", unit="mm", format="A4")
         pdf.set_margin(12)
         pdf.set_auto_page_break(auto=(res["best_r"] > 8), margin=15)
@@ -379,6 +426,7 @@ else:
             
             st.write(f"### Round {r['round']} ({round_start.strftime('%I:%M %p')} - {round_end.strftime('%I:%M %p')})")
             whatsapp_text += f"🟢 *ROUND {r['round']}* ({round_start.strftime('%I:%M %p')} - {round_end.strftime('%I:%M %p')})\n"
+            
             row_cells = [f"Round {r['round']}\n{round_start.strftime('%I:%M %p')}-{round_end.strftime('%I:%M %p')}"]
             
             if r['sitting_out']:
@@ -388,6 +436,7 @@ else:
             for idx, match in enumerate(r['matches']):
                 t1_p1, t1_p2 = match[0]
                 t2_p1, t2_p2 = match[1]
+                
                 c_num = idx + 1
                 emoji_num = num_emojis.get(c_num, f"{c_num}")
                 
@@ -399,14 +448,16 @@ else:
                 
             row_cells.append(", ".join(r['sitting_out']) if r['sitting_out'] else "None")
             table_data.append(row_cells)
+            
             st.divider()
             whatsapp_text += "\n"
-            current_time = round_end + timedelta(minutes=1)
+            current_time = round_end + timedelta(minutes=1) 
         
         st.warning(f"🧹 **{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}**: Clear up & Finish ({res['best_clearup']} mins)")
         whatsapp_text += f"🧹 *{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}*: Clear up & Finish ({res['best_clearup']} mins)\n"
         
         f_size = 7.5 if res["best_r"] == 8 else 8.5
+        
         pdf.set_font("Helvetica", "B", 10)
         with pdf.table(text_align="CENTER", col_widths=(14, 25, 25, 25, 20) if (res["max_playing_spots"] // 4) == 3 else None) as table:
             header_row = table.row()
@@ -424,11 +475,12 @@ else:
         pdf.cell(0, 5, f"Clear up & Finish: {current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')} ({res['best_clearup']} mins)", ln=True, align="C")
         
         st.write("### WhatsApp Export")
+        st.write("Click the copy button in the top right corner of the box below to paste this into your group chat!")
         st.code(whatsapp_text, language="markdown")
         
-        # --- SAFE NATIVE DOWNLOAD BUTTON BLOCK ---
+        # --- SAFE NATIVE DOWNLOAD BLOCK ---
         st.write("### Print Version")
-        st.write("Click below to download the clean single-page layout document.")
+        st.write("Download the clean single-page layout document matrix table here.")
         pdf_bytes = pdf.output()
         st.download_button(
             label="📥 Download Printable PDF",
