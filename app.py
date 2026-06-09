@@ -227,14 +227,22 @@ else:
             score = 0
             match_types = {'all_M': 0, 'all_F': 0, 'mixed': 0, 'awkward': 0}
             partner_counts = collections.defaultdict(int)
+            opponent_counts = collections.defaultdict(int)  # <-- Added to track opponent matchups
 
             for r in schedule:
                 for match in r['matches']:
                     t1_p1, t1_p2 = match[0]
                     t2_p1, t2_p2 = match[1]
 
+                    # Track Partnerings
                     partner_counts[frozenset([t1_p1['name'], t1_p2['name']])] += 1
                     partner_counts[frozenset([t2_p1['name'], t2_p2['name']])] += 1
+
+                    # Track Opponents (Every combination of Team 1 vs Team 2)
+                    opponent_counts[frozenset([t1_p1['name'], t2_p1['name']])] += 1
+                    opponent_counts[frozenset([t1_p1['name'], t2_p2['name']])] += 1
+                    opponent_counts[frozenset([t1_p2['name'], t2_p1['name']])] += 1
+                    opponent_counts[frozenset([t1_p2['name'], t2_p2['name']])] += 1
 
                     m_count = sum(1 for p in [t1_p1, t1_p2, t2_p1, t2_p2] if p['gender'] == 'M')
                     if m_count == 4: match_types['all_M'] += 1
@@ -242,8 +250,13 @@ else:
                     elif m_count == 2: match_types['mixed'] += 1
                     else: match_types['awkward'] += 1
 
+            # Deduct if the same pairs partner up multiple times
             for pair, count in partner_counts.items():
                 if count > 1: score -= (count - 1) * 500
+
+            # --- NEW ADDITION: Deduct heavily if the same opponents face off multiple times ---
+            for pair, count in opponent_counts.items():
+                if count > 1: score -= (count - 1) * 300  # Penalty for opponent rematches
 
             score -= match_types['awkward'] * 1000
             
