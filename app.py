@@ -127,7 +127,7 @@ if unknown_players:
             st.rerun() 
 
 else:
-    # --- UPDATED GENERATOR ENGINE ---
+    # --- OPTIMIZED GENERATOR ENGINE ---
     def generate_schedule(players_list, num_courts, num_rounds):
         players = [{'name': name, 'gender': player_db[name]} for name in players_list]
         
@@ -143,7 +143,6 @@ else:
         
         max_playing = min(num_courts * 4, (len(players) // 4) * 4)
 
-        # Increased to 3,000 iterations to allow the stricter matrix tracking room to succeed
         for _ in range(3000):
             sit_outs = {p['name']: 0 for p in players}
             partner_history = {p['name']: set() for p in players}
@@ -151,12 +150,30 @@ else:
             schedule = []
 
             for round_num in range(1, num_rounds + 1):
-                temp_players = players[:]
-                random.shuffle(temp_players)
-                temp_players.sort(key=lambda x: sit_outs[x['name']], reverse=True)
+                # --- NEW SMART SIT-OUT SELECTOR ---
+                # Runs an internal lookahead loop to ensure active player genders are even numbers
+                best_act, best_sit = None, None
+                best_awk = 999
                 
-                active_players = temp_players[:max_playing]
-                sitting_out = temp_players[max_playing:]
+                for _ in range(50):
+                    temp_players = players[:]
+                    random.shuffle(temp_players)
+                    temp_players.sort(key=lambda x: sit_outs[x['name']], reverse=True)
+                    
+                    act = temp_players[:max_playing]
+                    sit = temp_players[max_playing:]
+                    
+                    m_count = sum(1 for p in act if p['gender'] == 'M')
+                    # An even number of active men means no mandatory awkward splits
+                    awk = 0 if (m_count % 2 == 0) else 1
+                    
+                    if awk < best_awk:
+                        best_awk = awk
+                        best_act, best_sit = act, sit
+                        if awk == 0:
+                            break # Found a mathematically clean active pool matrix split
+                            
+                active_players, sitting_out = best_act, best_sit
                 
                 for p in sitting_out:
                     sit_outs[p['name']] += 1
@@ -203,11 +220,9 @@ else:
                         t1, t2 = way
                         w_score = 0
                         
-                        # Partner Restriction Check
                         if t1[1]['name'] in partner_history[t1[0]['name']]: w_score -= 500
                         if t2[1]['name'] in partner_history[t2[0]['name']]: w_score -= 500
 
-                        # Court-Sharing Protection: Intercept loops before they lock onto a court
                         pairs = [
                             (t1[0]['name'], t1[1]['name']), (t2[0]['name'], t2[1]['name']),
                             (t1[0]['name'], t2[0]['name']), (t1[0]['name'], t2[1]['name']),
@@ -216,7 +231,7 @@ else:
                         for pa, pb in pairs:
                             seen_count = court_sharing_history[frozenset([pa, pb])]
                             if seen_count >= 1:
-                                w_score -= seen_count * 150 # Escalates penalty for court-rematches
+                                w_score -= seen_count * 150 
 
                         g1 = sorted([t1[0]['gender'], t1[1]['gender']])
                         g2 = sorted([t2[0]['gender'], t2[1]['gender']])
@@ -235,7 +250,6 @@ else:
                     partner_history[t2[0]['name']].add(t2[1]['name'])
                     partner_history[t2[1]['name']].add(t2[0]['name'])
                     
-                    # Lock interaction pairs into local history state
                     all_players_on_court = [t1[0]['name'], t1[1]['name'], t2[0]['name'], t2[1]['name']]
                     for i in range(4):
                         for j in range(i + 1, 4):
@@ -262,7 +276,6 @@ else:
                     partner_counts[frozenset([t1_p1['name'], t1_p2['name']])] += 1
                     partner_counts[frozenset([t2_p1['name'], t2_p2['name']])] += 1
 
-                    # Log every court match configuration connection globally
                     all_p = [t1_p1['name'], t1_p2['name'], t2_p1['name'], t2_p2['name']]
                     for i in range(4):
                         for j in range(i + 1, 4):
@@ -277,7 +290,6 @@ else:
             for pair, count in partner_counts.items():
                 if count > 1: score -= (count - 1) * 1000
 
-            # CRITICAL LOOP PENALTY: Heavily flags schedules containing 3x or 4x court duplicates
             for pair, count in global_sharing_counts.items():
                 if count > 2: 
                     score -= (count - 2) * 800  
@@ -302,7 +314,7 @@ else:
 
         return best_schedule, best_sit_outs
 
-    # --- UI TRIGGER BLOCK ---
+    # --- UI RENDER SYSTEM ---
     if st.button("Generate Matches", type="primary"):
         total_players = len(final_input_names)
         if total_players < 4:
@@ -313,50 +325,34 @@ else:
                 max_playing_spots = min(courts_available * 4, (total_players // 4) * 4)
                 sitting_out_per_round = total_players - max_playing_spots
                 
-                best_r = 0
-                best_d = 0
-                best_warmup = 0
-                best_clearup = 0
+                best_r, best_d, best_warmup, best_clearup = 0, 0, 0, 0
                 best_score = (-1, -1, -1, -1) 
 
                 for d in range(12, 16):
                     min_non_playing = 7 if include_warmup else 2
                     available_for_matches = total_time_mins - min_non_playing
-                    
                     r = (available_for_matches + 1) // (d + 1)
                     
                     if r > 0:
                         time_for_matches = (r * d) + (r - 1)
                         remaining_time = total_time_mins - time_for_matches
-                        
-                        if include_warmup:
-                            warmup = min(10, remaining_time - 2)
-                            clearup = remaining_time - warmup
-                        else:
-                            warmup = 0
-                            clearup = remaining_time
+                        warmup = min(10, remaining_time - 2) if include_warmup else 0
+                        clearup = remaining_time - warmup
                             
                         total_play_time = r * d
                         total_sitouts = r * sitting_out_per_round
-                        
                         is_perfect = 1 if (sitting_out_per_round > 0 and total_sitouts % total_players == 0) else 0
                         if sitting_out_per_round == 0: is_perfect = 1
                         
                         score = (is_perfect, r, total_play_time, -clearup)
-                        
                         if score > best_score:
-                            best_score = score
-                            best_r = r
-                            best_d = d
-                            best_warmup = warmup
-                            best_clearup = clearup
+                            best_score, best_r, best_d, best_warmup, best_clearup = score, r, d, warmup, clearup
                 
                 if best_r == 0:
                     st.error("The session is too short to fit the matches properly.")
                 else:
                     schedule, final_sit_outs = generate_schedule(final_input_names, courts_available, best_r)
                     
-                    # Cache layout to state engine to eliminate the refresh bug
                     st.session_state["pickleball_results"] = {
                         "schedule": schedule,
                         "final_sit_outs": final_sit_outs,
@@ -368,7 +364,6 @@ else:
                         "max_playing_spots": max_playing_spots
                     }
 
-    # --- UI RENDERING (SAVES STATE STABILITY) ---
     if "pickleball_results" in st.session_state:
         res = st.session_state["pickleball_results"]
         
@@ -383,10 +378,8 @@ else:
         start_time_calculated = datetime.combine(datetime.today(), session_start)
         session_end_time = start_time_calculated + timedelta(minutes=total_time_mins)
         current_time = start_time_calculated
-        
         num_emojis = {1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣", 7: "7️⃣", 8: "8️⃣"}
         
-        # Build A4 PDF Canvas
         pdf = FPDF(orientation="landscape", unit="mm", format="A4")
         pdf.set_margin(12)
         pdf.set_auto_page_break(auto=(res["best_r"] > 8), margin=15)
@@ -417,7 +410,7 @@ else:
         if include_warmup:
             warmup_end = current_time + timedelta(minutes=res["best_warmup"])
             st.info(f"🤸 **{current_time.strftime('%I:%M %p')} - {warmup_end.strftime('%I:%M %p')}**: Warmup ({res['best_warmup']} mins)")
-            whatsapp_text += f"🤸 *{current_time.strftime('%I:%M %p')} - {warmup_end.strftime('%I:%M %p')}*: Warmup ({res['best_warmup']} mins)\n\n"
+            whatsapp_text += f"🤸 *{current_time.strftime('%I:%M %p')} - {warmup_end.strftime('%I:%M %p')}**: Warmup ({res['best_warmup']} mins)\n\n"
             current_time = warmup_end
         
         for r in res["schedule"]:
@@ -426,7 +419,6 @@ else:
             
             st.write(f"### Round {r['round']} ({round_start.strftime('%I:%M %p')} - {round_end.strftime('%I:%M %p')})")
             whatsapp_text += f"🟢 *ROUND {r['round']}* ({round_start.strftime('%I:%M %p')} - {round_end.strftime('%I:%M %p')})\n"
-            
             row_cells = [f"Round {r['round']}\n{round_start.strftime('%I:%M %p')}-{round_end.strftime('%I:%M %p')}"]
             
             if r['sitting_out']:
@@ -436,7 +428,6 @@ else:
             for idx, match in enumerate(r['matches']):
                 t1_p1, t1_p2 = match[0]
                 t2_p1, t2_p2 = match[1]
-                
                 c_num = idx + 1
                 emoji_num = num_emojis.get(c_num, f"{c_num}")
                 
@@ -448,7 +439,6 @@ else:
                 
             row_cells.append(", ".join(r['sitting_out']) if r['sitting_out'] else "None")
             table_data.append(row_cells)
-            
             st.divider()
             whatsapp_text += "\n"
             current_time = round_end + timedelta(minutes=1) 
@@ -457,7 +447,6 @@ else:
         whatsapp_text += f"🧹 *{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}*: Clear up & Finish ({res['best_clearup']} mins)\n"
         
         f_size = 7.5 if res["best_r"] == 8 else 8.5
-        
         pdf.set_font("Helvetica", "B", 10)
         with pdf.table(text_align="CENTER", col_widths=(14, 25, 25, 25, 20) if (res["max_playing_spots"] // 4) == 3 else None) as table:
             header_row = table.row()
@@ -478,9 +467,7 @@ else:
         st.write("Click the copy button in the top right corner of the box below to paste this into your group chat!")
         st.code(whatsapp_text, language="markdown")
         
-        # --- SAFE NATIVE DOWNLOAD BLOCK ---
         st.write("### Print Version")
-        st.write("Download the clean single-page layout document matrix table here.")
         pdf_bytes = pdf.output()
         st.download_button(
             label="📥 Download Printable PDF",
