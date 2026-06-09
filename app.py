@@ -4,7 +4,7 @@ import json
 import gspread
 import unicodedata
 import collections
-import base64  # <-- Added for browser preview rendering
+import base64
 from datetime import datetime, time, timedelta
 from fpdf import FPDF
 
@@ -348,7 +348,6 @@ else:
                     pdf = FPDF(orientation="landscape", unit="mm", format="A4")
                     pdf.set_margin(12)
                     
-                    # If rounds are 8 or fewer, strictly disable auto page break to hold everything tightly to 1 page
                     if best_r <= 8:
                         pdf.set_auto_page_break(auto=False)
                     else:
@@ -421,7 +420,6 @@ else:
                     st.warning(f"🧹 **{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}**: Clear up & Finish ({best_clearup} mins)")
                     whatsapp_text += f"🧹 *{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}*: Clear up & Finish ({best_clearup} mins)\n"
                     
-                    # Dynamically pick tighter fonts for 8 rounds to perfectly fit onto 1 canvas sheet
                     f_size = 7.5 if best_r == 8 else 8.5
                     
                     pdf.set_font("Helvetica", "B", 10)
@@ -448,15 +446,13 @@ else:
                     st.write("### PDF Schedule Preview")
                     pdf_bytes = pdf.output()
                     
-                    # Convert raw bytes into browser readable base64 string
                     base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
                     pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="500" type="application/pdf"></iframe>'
                     
-                    # Inject display element into the layout canvas natively
+                    # FIX: Inject display element and use standard st.write() padding instead of st.ln()
                     st.markdown(pdf_display, unsafe_allow_html=True)
-                    st.ln(2)
+                    st.write("") 
                     
-                    # Backup download trigger link element
                     st.download_button(
                         label="📥 Download PDF Document File",
                         data=bytes(pdf_bytes),
