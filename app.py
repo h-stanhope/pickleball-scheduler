@@ -5,6 +5,7 @@ import gspread
 import unicodedata
 import collections
 from datetime import datetime, time, timedelta
+from fpdf import FPDF  # <-- Added for PDF generation
 
 st.set_page_config(page_title="Pickleball Generator", page_icon="🏓")
 
@@ -339,8 +340,17 @@ else:
                     current_time = datetime.combine(datetime.today(), session_start)
                     session_end_time = current_time + timedelta(minutes=total_time_mins)
                     
-                    # Numbered emoji dictionary lookup
                     num_emojis = {1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣", 7: "7️⃣", 8: "8️⃣"}
+                    
+                    # --- PDF SETUP ---
+                    pdf = FPDF()
+                    pdf.set_auto_page_break(auto=True, margin=15)
+                    pdf.add_page()
+                    pdf.set_font("Helvetica", "B", 16)
+                    pdf.cell(0, 10, "Tonight's Pickleball Schedule", ln=True, align="C")
+                    pdf.set_font("Helvetica", "", 11)
+                    pdf.cell(0, 8, f"Session: {current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}  |  Players: {total_players}  |  Courts Used: {max_playing_spots // 4}  |  Match Length: {best_d} mins", ln=True, align="C")
+                    pdf.ln(5)
                     
                     whatsapp_text = f"🏓 *Tonight's Pickleball Schedule* 🏓\n"
                     whatsapp_text += f"⏱️ *Session:* {current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}\n"
@@ -351,6 +361,11 @@ else:
                         warmup_end = current_time + timedelta(minutes=best_warmup)
                         st.info(f"🤸 **{current_time.strftime('%I:%M %p')} - {warmup_end.strftime('%I:%M %p')}**: Warmup ({best_warmup} mins)")
                         whatsapp_text += f"🤸 *{current_time.strftime('%I:%M %p')} - {warmup_end.strftime('%I:%M %p')}*: Warmup ({best_warmup} mins)\n\n"
+                        
+                        pdf.set_font("Helvetica", "I", 11)
+                        pdf.cell(0, 8, f"{current_time.strftime('%I:%M %p')} - {warmup_end.strftime('%I:%M %p')}: Warmup ({best_warmup} mins)", ln=True)
+                        pdf.ln(2)
+                        
                         current_time = warmup_end
                     
                     for r in schedule:
@@ -360,10 +375,17 @@ else:
                         st.write(f"### Round {r['round']} ({round_start.strftime('%I:%M %p')} - {round_end.strftime('%I:%M %p')})")
                         whatsapp_text += f"🟢 *ROUND {r['round']}* ({round_start.strftime('%I:%M %p')} - {round_end.strftime('%I:%M %p')})\n"
                         
+                        pdf.set_font("Helvetica", "B", 12)
+                        pdf.cell(0, 8, f"ROUND {r['round']} ({round_start.strftime('%I:%M %p')} - {round_end.strftime('%I:%M %p')})", ln=True)
+                        
                         if r['sitting_out']:
                             st.info(f"**Sitting out:** {', '.join(r['sitting_out'])}")
                             whatsapp_text += f"🛋️ *Sitting out:* {', '.join(r['sitting_out'])}\n"
+                            
+                            pdf.set_font("Helvetica", "I", 10)
+                            pdf.cell(0, 6, f"Sitting out: {', '.join(r['sitting_out'])}", ln=True)
                         
+                        pdf.set_font("Helvetica", "", 11)
                         for idx, match in enumerate(r['matches']):
                             t1_p1, t1_p2 = match[0]
                             t2_p1, t2_p2 = match[1]
@@ -374,18 +396,35 @@ else:
                             match_str = f"{t1_p1['name']} & {t1_p2['name']} VS {t2_p1['name']} & {t2_p2['name']}"
                             st.write(f"**Court {emoji_num}:** {match_str}")
                             whatsapp_text += f"{emoji_num} Court {c_num}: {match_str}\n"
+                            
+                            pdf.cell(0, 6, f"  Court {c_num}: {match_str}", ln=True)
                         
                         st.divider()
                         whatsapp_text += "\n"
+                        pdf.ln(4)
                         
                         current_time = round_end + timedelta(minutes=1) 
                     
                     st.warning(f"🧹 **{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}**: Clear up & Finish ({best_clearup} mins)")
                     whatsapp_text += f"🧹 *{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}*: Clear up & Finish ({best_clearup} mins)\n"
                     
+                    pdf.set_font("Helvetica", "I", 11)
+                    pdf.cell(0, 8, f"{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}: Clear up & Finish ({best_clearup} mins)", ln=True)
+                    
                     st.write("### WhatsApp Export")
                     st.write("Click the copy button in the top right corner of the box below to paste this into your group chat!")
                     st.code(whatsapp_text, language="markdown")
+                    
+                    # --- PDF DOWNLOAD SELECTION ---
+                    st.write("### Print Version")
+                    st.write("Download a clean, structured PDF layout optimized for physical clipboards and printing.")
+                    pdf_bytes = pdf.output()
+                    st.download_button(
+                        label="📥 Download Printable PDF",
+                        data=bytes(pdf_bytes),
+                        file_name=f"pickleball_schedule_{datetime.today().strftime('%Y-%m-%d')}.pdf",
+                        mime="application/pdf"
+                    )
                     
                     st.write("### Audit: Total Sit-Outs Per Player")
                     st.json(final_sit_outs)
