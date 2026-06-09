@@ -203,7 +203,7 @@ else:
                         g1 = sorted([t1[0]['gender'], t1[1]['gender']])
                         g2 = sorted([t2[0]['gender'], t2[1]['gender']])
 
-                        if g1 == ['F', 'M'] and g2 == ['F', 'M']: w_score += 10
+                        if g1 == ['F', 'M'] and g2 == ['F', 'M']: w_score += 20
                         elif g1 == ['M', 'M'] and g2 == ['M', 'M']: w_score += 10
                         elif g1 == ['F', 'F'] and g2 == ['F', 'F']: w_score += 10
 
@@ -227,18 +227,16 @@ else:
             score = 0
             match_types = {'all_M': 0, 'all_F': 0, 'mixed': 0, 'awkward': 0}
             partner_counts = collections.defaultdict(int)
-            opponent_counts = collections.defaultdict(int)  # <-- Added to track opponent matchups
+            opponent_counts = collections.defaultdict(int)
 
             for r in schedule:
                 for match in r['matches']:
                     t1_p1, t1_p2 = match[0]
                     t2_p1, t2_p2 = match[1]
 
-                    # Track Partnerings
                     partner_counts[frozenset([t1_p1['name'], t1_p2['name']])] += 1
                     partner_counts[frozenset([t2_p1['name'], t2_p2['name']])] += 1
 
-                    # Track Opponents (Every combination of Team 1 vs Team 2)
                     opponent_counts[frozenset([t1_p1['name'], t2_p1['name']])] += 1
                     opponent_counts[frozenset([t1_p1['name'], t2_p2['name']])] += 1
                     opponent_counts[frozenset([t1_p2['name'], t2_p1['name']])] += 1
@@ -250,13 +248,11 @@ else:
                     elif m_count == 2: match_types['mixed'] += 1
                     else: match_types['awkward'] += 1
 
-            # Deduct if the same pairs partner up multiple times
             for pair, count in partner_counts.items():
                 if count > 1: score -= (count - 1) * 500
 
-            # --- NEW ADDITION: Deduct heavily if the same opponents face off multiple times ---
             for pair, count in opponent_counts.items():
-                if count > 1: score -= (count - 1) * 300  # Penalty for opponent rematches
+                if count > 1: score -= (count - 1) * 300
 
             score -= match_types['awkward'] * 1000
             
@@ -293,7 +289,6 @@ else:
                 best_clearup = 0
                 best_score = (-1, -1, -1, -1) 
 
-                # --- NEW OPTIMIZER: Fairness First, Maximum Rounds Second ---
                 for d in range(12, 16):
                     min_non_playing = 7 if include_warmup else 2
                     available_for_matches = total_time_mins - min_non_playing
@@ -317,7 +312,6 @@ else:
                         is_perfect = 1 if (sitting_out_per_round > 0 and total_sitouts % total_players == 0) else 0
                         if sitting_out_per_round == 0: is_perfect = 1
                         
-                        # Score ranks: Perfect fairness > Most rounds (dilutes sitouts) > Total Play Time > Short clearup
                         score = (is_perfect, r, total_play_time, -clearup)
                         
                         if score > best_score:
@@ -338,16 +332,19 @@ else:
                     col1.metric("👥 Players", total_players)
                     col2.metric("🔄 Rounds", best_r)
                     col3.metric("⏱️ Match Time", f"{best_d} min")
-                    col4.metric("🏸 Courts Used", max_playing_spots // 4)
+                    col4.metric("🏓 Courts Used", max_playing_spots // 4)
                     
                     st.divider()
                     
                     current_time = datetime.combine(datetime.today(), session_start)
                     session_end_time = current_time + timedelta(minutes=total_time_mins)
                     
+                    # Numbered emoji dictionary lookup
+                    num_emojis = {1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣", 7: "7️⃣", 8: "8️⃣"}
+                    
                     whatsapp_text = f"🏓 *Tonight's Pickleball Schedule* 🏓\n"
                     whatsapp_text += f"⏱️ *Session:* {current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}\n"
-                    whatsapp_text += f"👥 *Players:* {total_players} | 🏸 *Courts:* {max_playing_spots // 4}\n"
+                    whatsapp_text += f"👥 *Players:* {total_players} | 🏓 *Courts:* {max_playing_spots // 4}\n"
                     whatsapp_text += f"⏱️ *Match Time:* {best_d} mins\n\n"
                     
                     if include_warmup:
@@ -371,9 +368,12 @@ else:
                             t1_p1, t1_p2 = match[0]
                             t2_p1, t2_p2 = match[1]
                             
+                            c_num = idx + 1
+                            emoji_num = num_emojis.get(c_num, f"{c_num}")
+                            
                             match_str = f"{t1_p1['name']} & {t1_p2['name']} VS {t2_p1['name']} & {t2_p2['name']}"
-                            st.write(f"**Court {idx + 1}:** {match_str}")
-                            whatsapp_text += f"🏸 Court {idx + 1}: {match_str}\n"
+                            st.write(f"**Court {emoji_num}:** {match_str}")
+                            whatsapp_text += f"{emoji_num} Court {c_num}: {match_str}\n"
                         
                         st.divider()
                         whatsapp_text += "\n"
