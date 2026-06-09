@@ -4,6 +4,7 @@ import json
 import gspread
 import unicodedata
 import collections
+import base64  # <-- Added for browser preview rendering
 from datetime import datetime, time, timedelta
 from fpdf import FPDF
 
@@ -343,9 +344,16 @@ else:
                     
                     num_emojis = {1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣", 7: "7️⃣", 8: "8️⃣"}
                     
-                    # --- NATIVE TABLE PDF GENERATOR (STRICTLY 1 PAGE) ---
-                    pdf = FPDF(orientation="landscape", unit="mm", format="A4")  # Landscape fits courts beautifully side-by-side
+                    # --- NATIVE TABLE PDF GENERATOR (DYNAMIC MULTI-PAGE PROTECTION) ---
+                    pdf = FPDF(orientation="landscape", unit="mm", format="A4")
                     pdf.set_margin(12)
+                    
+                    # If rounds are 8 or fewer, strictly disable auto page break to hold everything tightly to 1 page
+                    if best_r <= 8:
+                        pdf.set_auto_page_break(auto=False)
+                    else:
+                        pdf.set_auto_page_break(auto=True, margin=15)
+                        
                     pdf.add_page()
                     
                     pdf.set_font("Helvetica", "B", 16)
@@ -359,13 +367,11 @@ else:
                     pdf.cell(0, 6, meta_text, ln=True, align="C")
                     pdf.ln(4)
                     
-                    # Prepare table header dynamic configuration
                     table_headers = ["Round / Time"]
                     for c_idx in range(max_playing_spots // 4):
                         table_headers.append(f"Court {c_idx + 1}")
                     table_headers.append("Sitting Out")
                     
-                    # Construct rows natively
                     table_data = []
                     
                     whatsapp_text = f"🏓 *Tonight's Pickleball Schedule* 🏓\n"
@@ -403,7 +409,6 @@ else:
                             st.write(f"**Court {emoji_num}:** {match_str}")
                             whatsapp_text += f"{emoji_num} Court {c_num}: {match_str}\n"
                             
-                            # Standard clean format for the print cell
                             row_cells.append(f"{t1_p1['name']} & {t1_p2['name']}\n    vs\n{t2_p1['name']} & {t2_p2['name']}")
                             
                         row_cells.append(", ".join(r['sitting_out']) if r['sitting_out'] else "None")
@@ -416,16 +421,16 @@ else:
                     st.warning(f"🧹 **{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}**: Clear up & Finish ({best_clearup} mins)")
                     whatsapp_text += f"🧹 *{current_time.strftime('%I:%M %p')} - {session_end_time.strftime('%I:%M %p')}*: Clear up & Finish ({best_clearup} mins)\n"
                     
-                    # Draw structured table on the PDF canvas safely
+                    # Dynamically pick tighter fonts for 8 rounds to perfectly fit onto 1 canvas sheet
+                    f_size = 7.5 if best_r == 8 else 8.5
+                    
                     pdf.set_font("Helvetica", "B", 10)
                     with pdf.table(text_align="CENTER", col_widths=(14, 25, 25, 25, 20) if (max_playing_spots // 4) == 3 else None) as table:
-                        # Print Header Row
                         header_row = table.row()
                         for h in table_headers:
                             header_row.cell(h)
                         
-                        # Print Body Rows
-                        pdf.set_font("Helvetica", "", 8.5)
+                        pdf.set_font("Helvetica", "", f_size)
                         for row_data in table_data:
                             body_row = table.row()
                             for cell_text in row_data:
@@ -439,12 +444,21 @@ else:
                     st.write("Click the copy button in the top right corner of the box below to paste this into your group chat!")
                     st.code(whatsapp_text, language="markdown")
                     
-                    # --- PRINT GRID BLOCK ---
-                    st.write("### Print Version")
-                    st.write("Download a beautiful landscape grid layout guaranteed to fit completely on one printable sheet.")
+                    # --- IN-BROWSER PDF PREVIEW VISUALIZER ---
+                    st.write("### PDF Schedule Preview")
                     pdf_bytes = pdf.output()
+                    
+                    # Convert raw bytes into browser readable base64 string
+                    base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
+                    pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="500" type="application/pdf"></iframe>'
+                    
+                    # Inject display element into the layout canvas natively
+                    st.markdown(pdf_display, unsafe_allow_html=True)
+                    st.ln(2)
+                    
+                    # Backup download trigger link element
                     st.download_button(
-                        label="📥 Download Printable PDF (Strictly 1 Page)",
+                        label="📥 Download PDF Document File",
                         data=bytes(pdf_bytes),
                         file_name=f"pickleball_matrix_schedule_{datetime.today().strftime('%Y-%m-%d')}.pdf",
                         mime="application/pdf"
