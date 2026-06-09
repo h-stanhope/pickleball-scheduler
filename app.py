@@ -344,10 +344,11 @@ else:
                     
                     num_emojis = {1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣", 7: "7️⃣", 8: "8️⃣"}
                     
-                    # --- NATIVE TABLE PDF GENERATOR (DYNAMIC MULTI-PAGE PROTECTION) ---
+                    # --- NATIVE TABLE PDF GENERATOR (A4 Landscape) ---
                     pdf = FPDF(orientation="landscape", unit="mm", format="A4")
                     pdf.set_margin(12)
                     
+                    # Layout safety protection logic
                     if best_r <= 8:
                         pdf.set_auto_page_break(auto=False)
                     else:
@@ -442,23 +443,34 @@ else:
                     st.write("Click the copy button in the top right corner of the box below to paste this into your group chat!")
                     st.code(whatsapp_text, language="markdown")
                     
-                    # --- IN-BROWSER PDF PREVIEW VISUALIZER ---
-                    st.write("### PDF Schedule Preview")
+                    # --- NEW HYPERLINK SOLUTION (NO PAGE RERUN) ---
+                    st.write("### Print Version")
+                    st.write("Open the clean single-page matrix layout in a secure browser tab to print or save natively.")
                     pdf_bytes = pdf.output()
                     
+                    # Compile raw bytes into a safe binary inline blob link
                     base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
-                    pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="500" type="application/pdf"></iframe>'
+                    blob_url = f"data:application/pdf;base64,{base64_pdf}"
                     
-                    # FIX: Inject display element and use standard st.write() padding instead of st.ln()
-                    st.markdown(pdf_display, unsafe_allow_html=True)
-                    st.write("") 
-                    
-                    st.download_button(
-                        label="📥 Download PDF Document File",
-                        data=bytes(pdf_bytes),
-                        file_name=f"pickleball_matrix_schedule_{datetime.today().strftime('%Y-%m-%d')}.pdf",
-                        mime="application/pdf"
-                    )
+                    # Style the HTML anchor link exactly like Streamlit's native buttons
+                    button_html = f'''
+                    <a href="{blob_url}" target="_blank" style="
+                        text-decoration: none;
+                        color: white;
+                        background-color: #FF4B4B;
+                        padding: 10px 20px;
+                        border-radius: 8px;
+                        font-weight: 500;
+                        display: inline-block;
+                        text-align: center;
+                        border: none;
+                        transition: background-color 0.3s ease;
+                    " onmouseover="this.style.backgroundColor='#E03E3E'" onmouseout="this.style.backgroundColor='#FF4B4B'">
+                        🖨️ Open PDF in New Tab
+                    </a>
+                    '''
+                    st.markdown(button_html, unsafe_allow_html=True)
+                    st.write("")
                     
                     st.write("### Audit: Total Sit-Outs Per Player")
                     st.json(final_sit_outs)
